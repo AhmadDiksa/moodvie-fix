@@ -16,8 +16,6 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.tools import tool
 from langchain_core.prompts import PromptTemplate
 from langchain_core.messages import HumanMessage, AIMessage
-from langchain.agents import create_tool_calling_agent
-from langchain.agents.agent import AgentExecutor
 
 # Qdrant imports
 from qdrant_client import QdrantClient
@@ -277,63 +275,38 @@ class MovieTherapistAgent:
     # ==========================================================================
     
     def _setup_agent(self):
-        """Set up the LangChain agent with tools."""
+        """Set up the agent by binding tools to the LLM."""
         
-        # Create system prompt for the agent
-        system_prompt = """Anda adalah 'Movie Therapist' - seorang AI yang memahami emosi manusia dan merekomendasikan film yang sempurna untuk suasana hati mereka.
-
-Proses Anda:
-1. Dengarkan dan pahami mood/keadaan emosional user
-2. Gunakan tool 'get_recommendations_tool' untuk mencari film yang sesuai
-3. Jika user tertarik pada film tertentu, gunakan tool 'get_streaming_links_tool' untuk menemukan di mana mereka bisa menontonnya
-4. Berikan ringkasan review film dengan bahasa santai dan dalam Bahasa Indonesia
-
-Gaya komunikasi Anda:
-- Empatik dan memahami
-- Santai dan ramah
-- Memberikan insight tentang mengapa film ini cocok untuk mood mereka
-- Gunakan emoji yang sesuai
-
-Selalu ringkas reviews menjadi 2-3 kalimat yang meaningful.
-
-When you have a response to say to the human, or if you do not need to use a tool, you MUST use the format:
-
-Thought: Do I need to use a tool? No
-Final Answer: [your response here]
-
-Use this format:
-
-Question: input question to answer
-Thought: Do I need to use a tool? Yes
-Action: the action to take, should be one of [{tool_names}]
-Action Input: the input to the action
-Observation: the result of the action
-... (this Thought/Action/Action Input/Observation can repeat N times)
-Thought: Do I need to use a tool? No
-Final Answer: [final response to the human]"""
-
-        prompt = PromptTemplate.from_template(system_prompt)
+        # Convert tools to a dictionary for easy lookup
+        self.tools_dict = {tool.name: tool for tool in self.tools}
+    
+    def _should_use_tool(self, response_text: str) -> tuple[bool, str, str]:
+        """
+        Parse LLM response to check if it wants to use a tool.
+        Returns (should_use_tool, tool_name, tool_input)
+        """
+        import json
         
-        # Create agent using tool_calling
-        try:
-            # Try the newer approach first
-            self.agent = create_tool_calling_agent(
-                self.llm,
-                self.tools,
-                prompt,
-            )
-        except:
-            # Fallback: Create a simple agent manually
-            self.agent = self.llm
+        # Check for tool usage patterns
+        if "TOOL:" in response_text and "ACTION:" in response_text:
+            try:
+                # Simple pattern matching for tool calls
+                lines = response_text.split('\n')
+                tool_name = None
+                tool_input = None
+                
+                for i, line in enumerate(lines):
+                    if "TOOL:" in line:
+                        tool_name = line.split("TOOL:")[1].strip()
+                    elif "ACTION:" in line or "ARGUMENT:" in line:
+                        tool_input = line.split(":", 1)[1].strip()
+                
+                if tool_name and tool_input:
+                    return True, tool_name, tool_input
+            except:
+                pass
         
-        # Create executor
-        self.agent_executor = AgentExecutor(
-            agent=self.agent,
-            tools=self.tools,
-            verbose=True,
-            handle_parsing_errors=True,
-            max_iterations=10,
-        )
+        return False, None, None
     
     def run_chat_turn(self, user_input: str, chat_history: List[Dict[str, str]]) -> str:
         """
@@ -347,22 +320,84 @@ Final Answer: [final response to the human]"""
             Agent's response
         """
         try:
-            # Build chat context from history
-            chat_context = ""
-            if chat_history:
-                for msg in chat_history[-5:]:  # Last 5 messages for context
-                    role = "User" if msg["role"] == "user" else "Agent"
-                    chat_context += f"{role}: {msg['content']}\n"
+            # Build system prompt
+            system_prompt = """Anda adalah 'Movie Therapist' - seorang AI yang memahami emosi manusia dan merekomendasikan film yang sempurna untuk suasana hati mereka.
+
+Proses Anda:
+1. Dengarkan dan pahami mood/keadaan emosional user
+2. Jika perlu mencari film: tuliskan "TOOL: get_recommendations_tool" dan "ACTION: [mood/genre user]"
+3. Jika perlu cari link: tuliskan "TOOL: get_streaming_links_tool" dan "ACTION: [movie title]"
+4. Berikan ringkasan review film dengan bahasa santai dan dalam Bahasa Indonesia
+
+Gaya komunikasi Anda:
+- Empatik dan memahami
+- Santai dan ramah
+- Memberikan insight tentang mengapa film ini cocok untuk mood mereka
+- Gunakan emoji yang sesuai
+
+Available tools:
+1. get_recommendations_tool - Cari film berdasarkan mood
+2. get_streaming_links_tool - Cari link streaming film"""
             
-            # Prepare input with context
-            full_input = f"{chat_context}\nUser: {user_input}" if chat_context else user_input
+            # Build conversation messages
+            messages = [
+                HumanMessage(content=system_prompt),
+            ]
             
-            # Run agent
-            result = self.agent_executor.invoke({
-                "input": full_input,
-            })
+            # Add chat history
+            for msg in chat_history[-3:]:  # Last 3 messages
+                if msg["role"] == "user":
+                    messages.append(HumanMessage(content=msg["content"]))
+                else:
+                    messages.append(AIMessage(content=msg["content"]))
             
-            return result.get("output", "Maaf, terjadi kesalahan dalam memproses permintaan Anda.")
+            # Add current user input
+            messages.append(HumanMessage(content=user_input))
+            
+            # Get LLM response
+            response = self.llm.invoke(messages)
+            response_text = response.content
+            
+            # Check if LLM wants to use a tool
+            max_iterations = 3
+            iteration = 0
+            tool_results = []
+            
+            while iteration < max_iterations:
+                should_use_tool, tool_name, tool_input = self._should_use_tool(response_text)
+                
+                if not should_use_tool:
+                    break
+                
+                # Execute tool if found
+                if tool_name and tool_name in self.tools_dict:
+                    try:
+                        tool_func = self.tools_dict[tool_name]
+                        # Call tool - handle both sync and methods
+                        if tool_name == "get_recommendations_tool":
+                            tool_result = self.get_recommendations_tool(tool_input)
+                        elif tool_name == "get_streaming_links_tool":
+                            tool_result = self.get_streaming_links_tool(tool_input)
+                        else:
+                            tool_result = str(tool_func(tool_input))
+                        
+                        tool_results.append(f"\nTool Result for {tool_name}:\n{tool_result}")
+                        
+                        # Ask LLM to continue with tool result
+                        messages.append(AIMessage(content=response_text))
+                        messages.append(HumanMessage(content=f"Tool result:\n{tool_result}\n\nPlease provide your response based on this information."))
+                        
+                        response = self.llm.invoke(messages)
+                        response_text = response.content
+                    except Exception as e:
+                        tool_results.append(f"Error executing {tool_name}: {str(e)}")
+                        break
+                else:
+                    break
+                
+                iteration += 1
+            
+            return response_text
         
         except Exception as e:
             error_msg = f"Error in chat turn: {str(e)}"
