@@ -13,10 +13,11 @@ from datetime import datetime
 # LangChain imports
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.tools import tool, Tool
-from langchain.agents import AgentExecutor, create_react_agent
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder, PromptTemplate
+from langchain_core.tools import tool
+from langchain_core.prompts import PromptTemplate
 from langchain_core.messages import HumanMessage, AIMessage
+from langchain.agents import create_tool_calling_agent
+from langchain.agents.agent import AgentExecutor
 
 # Qdrant imports
 from qdrant_client import QdrantClient
@@ -293,18 +294,37 @@ Gaya komunikasi Anda:
 - Memberikan insight tentang mengapa film ini cocok untuk mood mereka
 - Gunakan emoji yang sesuai
 
-Selalu ringkas reviews menjadi 2-3 kalimat yang meaningful."""
+Selalu ringkas reviews menjadi 2-3 kalimat yang meaningful.
+
+When you have a response to say to the human, or if you do not need to use a tool, you MUST use the format:
+
+Thought: Do I need to use a tool? No
+Final Answer: [your response here]
+
+Use this format:
+
+Question: input question to answer
+Thought: Do I need to use a tool? Yes
+Action: the action to take, should be one of [{tool_names}]
+Action Input: the input to the action
+Observation: the result of the action
+... (this Thought/Action/Action Input/Observation can repeat N times)
+Thought: Do I need to use a tool? No
+Final Answer: [final response to the human]"""
+
+        prompt = PromptTemplate.from_template(system_prompt)
         
-        prompt = PromptTemplate.from_template(
-            system_prompt + "\n\n{input}\n\nThink step by step.\n\n{agent_scratchpad}"
-        )
-        
-        # Create the agent using ReAct pattern (compatible with latest LangChain)
-        self.agent = create_react_agent(
-            self.llm,
-            self.tools,
-            prompt,
-        )
+        # Create agent using tool_calling
+        try:
+            # Try the newer approach first
+            self.agent = create_tool_calling_agent(
+                self.llm,
+                self.tools,
+                prompt,
+            )
+        except:
+            # Fallback: Create a simple agent manually
+            self.agent = self.llm
         
         # Create executor
         self.agent_executor = AgentExecutor(
@@ -327,19 +347,19 @@ Selalu ringkas reviews menjadi 2-3 kalimat yang meaningful."""
             Agent's response
         """
         try:
-            # Convert chat history to LangChain message format
-            messages = []
-            for msg in chat_history:
-                if msg["role"] == "user":
-                    messages.append(HumanMessage(content=msg["content"]))
-                else:
-                    messages.append(AIMessage(content=msg["content"]))
+            # Build chat context from history
+            chat_context = ""
+            if chat_history:
+                for msg in chat_history[-5:]:  # Last 5 messages for context
+                    role = "User" if msg["role"] == "user" else "Agent"
+                    chat_context += f"{role}: {msg['content']}\n"
+            
+            # Prepare input with context
+            full_input = f"{chat_context}\nUser: {user_input}" if chat_context else user_input
             
             # Run agent
             result = self.agent_executor.invoke({
-                "input": user_input,
-                "chat_history": messages,
-                "agent_scratchpad": "",
+                "input": full_input,
             })
             
             return result.get("output", "Maaf, terjadi kesalahan dalam memproses permintaan Anda.")
