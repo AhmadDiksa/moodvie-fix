@@ -13,9 +13,9 @@ from datetime import datetime
 # LangChain imports
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.tools import tool
-from langchain.agents import AgentExecutor, create_tool_calling_agent
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.tools import tool, Tool
+from langchain.agents import AgentExecutor, create_react_agent
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder, PromptTemplate
 from langchain_core.messages import HumanMessage, AIMessage
 
 # Qdrant imports
@@ -295,15 +295,12 @@ Gaya komunikasi Anda:
 
 Selalu ringkas reviews menjadi 2-3 kalimat yang meaningful."""
         
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", system_prompt),
-            MessagesPlaceholder(variable_name="chat_history"),
-            ("human", "{input}"),
-            MessagesPlaceholder(variable_name="agent_scratchpad"),
-        ])
+        prompt = PromptTemplate.from_template(
+            system_prompt + "\n\n{input}\n\nThink step by step.\n\n{agent_scratchpad}"
+        )
         
-        # Create the agent
-        self.agent = create_tool_calling_agent(
+        # Create the agent using ReAct pattern (compatible with latest LangChain)
+        self.agent = create_react_agent(
             self.llm,
             self.tools,
             prompt,
@@ -315,6 +312,7 @@ Selalu ringkas reviews menjadi 2-3 kalimat yang meaningful."""
             tools=self.tools,
             verbose=True,
             handle_parsing_errors=True,
+            max_iterations=10,
         )
     
     def run_chat_turn(self, user_input: str, chat_history: List[Dict[str, str]]) -> str:
