@@ -49,12 +49,87 @@ st.markdown("""
     .main {
         padding: 2rem;
     }
-    .movie-card {
-        background-color: #f0f2f6;
-        border-radius: 0.5rem;
-        padding: 1rem;
-        margin-bottom: 1rem;
+    
+    /* Netflix-style Movie Cards */
+    .movie-cards-container {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+        gap: 1.5rem;
+        margin: 2rem 0;
     }
+    
+    .movie-card {
+        background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+        border-radius: 0.75rem;
+        overflow: hidden;
+        transition: transform 0.3s ease, box-shadow 0.3s ease;
+        cursor: pointer;
+        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+        color: white;
+        position: relative;
+    }
+    
+    .movie-card:hover {
+        transform: translateY(-8px) scale(1.05);
+        box-shadow: 0 8px 25px rgba(229, 9, 20, 0.4);
+    }
+    
+    .movie-poster {
+        width: 100%;
+        height: 280px;
+        object-fit: cover;
+        background: linear-gradient(45deg, #333, #555);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 3rem;
+    }
+    
+    .movie-info {
+        padding: 1rem;
+    }
+    
+    .movie-title {
+        font-size: 1.1rem;
+        font-weight: bold;
+        margin-bottom: 0.5rem;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    
+    .movie-rating {
+        color: #e50914;
+        font-weight: bold;
+        margin-bottom: 0.5rem;
+    }
+    
+    .movie-genre {
+        font-size: 0.85rem;
+        color: #b3b3b3;
+        margin-bottom: 0.75rem;
+    }
+    
+    .movie-plot {
+        font-size: 0.85rem;
+        color: #e5e5e5;
+        line-height: 1.4;
+        height: 60px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        display: -webkit-box;
+        -webkit-line-clamp: 3;
+        -webkit-box-orient: vertical;
+    }
+    
+    .movie-reviews {
+        font-size: 0.8rem;
+        color: #ffb000;
+        margin-top: 0.75rem;
+        padding-top: 0.75rem;
+        border-top: 1px solid #333;
+    }
+    
     .streaming-link {
         background-color: #e3f2fd;
         padding: 0.5rem;
@@ -112,6 +187,107 @@ with st.sidebar:
     st.markdown("---")
     st.info("💡 Simpan API keys di file `.env` untuk keamanan lebih baik.")
 
+
+# =============================================================================
+# HELPER FUNCTIONS FOR DISPLAY
+# =============================================================================
+
+def display_movie_cards(movies_data: List[Dict[str, Any]]) -> None:
+    """
+    Display movies in Netflix-style card grid.
+    
+    Args:
+        movies_data: List of movie dictionaries with keys: title, plot, poster_url, 
+                    raw_reviews, genre, rating, etc.
+    """
+    if not movies_data:
+        st.warning("Tidak ada film yang ditemukan")
+        return
+    
+    # Create columns for cards
+    cols = st.columns(min(3, len(movies_data)))
+    
+    for idx, movie in enumerate(movies_data):
+        col = cols[idx % len(cols)]
+        
+        with col:
+            # Create card container
+            card_html = f"""
+            <div class="movie-card">
+                <div class="movie-poster">
+            """
+            
+            # Add poster if available
+            poster_url = movie.get("poster_url", "") or movie.get("poster", "")
+            if poster_url and poster_url.startswith("http"):
+                card_html = f"""
+                <div class="movie-card">
+                    <img src="{poster_url}" class="movie-poster" onerror="this.parentElement.style.backgroundColor='#333'">
+                """
+            else:
+                # Fallback emoji based on genre
+                genre = movie.get("genre", "Film").lower()
+                emoji = "🎬"
+                if "horror" in genre or "seram" in genre:
+                    emoji = "😱"
+                elif "action" in genre or "aksi" in genre:
+                    emoji = "💥"
+                elif "comedy" in genre or "komedi" in genre:
+                    emoji = "😂"
+                elif "romance" in genre or "romantis" in genre:
+                    emoji = "💕"
+                elif "drama" in genre:
+                    emoji = "😢"
+                elif "animation" in genre or "animasi" in genre:
+                    emoji = "🎨"
+                
+                card_html = f"""
+                <div class="movie-card">
+                    <div class="movie-poster" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; font-size: 60px;">
+                        {emoji}
+                    </div>
+                """
+            
+            # Movie info
+            title = movie.get("title", "Unknown Title")
+            rating = movie.get("rating", "N/A")
+            genre = movie.get("genre", "N/A")
+            plot = movie.get("plot", "No description available")[:100]
+            reviews = movie.get("raw_reviews", "")[:50]
+            
+            card_html += f"""
+                    <div class="movie-info">
+                        <div class="movie-title">{title}</div>
+                        <div class="movie-rating">⭐ {rating}</div>
+                        <div class="movie-genre">{genre}</div>
+                        <div class="movie-plot">{plot}...</div>
+                        <div class="movie-reviews">💬 {reviews}</div>
+                    </div>
+                </div>
+            """
+            
+            st.markdown(card_html, unsafe_allow_html=True)
+
+def parse_movie_data(recommendations_str: str) -> List[Dict[str, Any]]:
+    """
+    Parse movie recommendations from string format to dict.
+    
+    Args:
+        recommendations_str: String representation of recommendations list
+        
+    Returns:
+        List of parsed movie dictionaries
+    """
+    try:
+        import ast
+        # Try to parse as Python literal
+        movies = ast.literal_eval(recommendations_str)
+        if isinstance(movies, list):
+            return movies
+    except:
+        pass
+    
+    return []
 
 # =============================================================================
 # MOVIETHERAPIST AGENT CLASS
@@ -204,13 +380,17 @@ class MovieTherapistAgent:
                     movie_data = {
                         "title": result.payload.get("title", "N/A"),
                         "plot": result.payload.get("plot", "N/A"),
-                        "poster": result.payload.get("poster_url", ""),
+                        "poster_url": result.payload.get("poster_url", ""),
                         "raw_reviews": result.payload.get("raw_reviews", ""),
                         "genre": result.payload.get("genre", "N/A"),
                         "rating": result.payload.get("rating", "N/A"),
                         "similarity_score": result.score,
                     }
                     recommendations.append(movie_data)
+                
+                # Store in session state for display
+                if recommendations:
+                    st.session_state.last_recommendations = recommendations
                 
                 return str(recommendations)
         
@@ -360,11 +540,8 @@ Prioritas: SELALU carikan rekomendasi film jika user menunjukkan emosi/mood apap
             messages.append(HumanMessage(content=user_input))
             
             # Get initial response from LLM
-            st.write("🤖 Memproses dengan AI...")
             response = self.llm.invoke(messages)
             response_text = response.content
-            
-            st.write(f"LLM Response: {response_text[:200]}...")
             
             # Check if we need to use tools
             max_iterations = 2
@@ -376,21 +553,24 @@ Prioritas: SELALU carikan rekomendasi film jika user menunjukkan emosi/mood apap
                 if not should_use_tool:
                     break
                 
-                st.write(f"🔧 Using tool: {tool_name}")
-                
                 # Execute the appropriate tool
                 try:
                     if tool_name == "get_recommendations_tool":
                         # Use user input or extracted mood
                         tool_result = self.get_recommendations_tool(user_input)
+                        
+                        # Display movie cards immediately
+                        st.markdown("### 🎬 Rekomendasi Film Untukmu:")
+                        movies = parse_movie_data(tool_result)
+                        if movies:
+                            display_movie_cards(movies)
+                    
                     elif tool_name == "get_streaming_links_tool":
                         # Extract movie title from response or input
                         movie_title = tool_input if tool_input != response_text else "unknown"
                         tool_result = self.get_streaming_links_tool(movie_title)
                     else:
                         break
-                    
-                    st.write(f"✅ Tool result obtained")
                     
                     # Ask LLM to summarize tool result
                     messages.append(AIMessage(content=response_text))
@@ -435,6 +615,9 @@ def main():
     
     if "agent_initialized" not in st.session_state:
         st.session_state.agent_initialized = False
+    
+    if "last_recommendations" not in st.session_state:
+        st.session_state.last_recommendations = []
     
     # Main title
     st.title("🎬 Movie Therapist Agent")
