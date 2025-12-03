@@ -276,29 +276,43 @@ class MovieTherapistAgent:
     
     def _setup_agent(self):
         """Set up the agent by binding tools to the LLM."""
-        
         # Convert tools to a dictionary for easy lookup
-        self.tools_dict = {tool.name: tool for tool in self.tools}
+        self.tools_dict = {
+            "get_recommendations_tool": self.get_recommendations_tool,
+            "get_streaming_links_tool": self.get_streaming_links_tool,
+        }
     
     def _should_use_tool(self, response_text: str) -> tuple[bool, str, str]:
         """
         Parse LLM response to check if it wants to use a tool.
         Returns (should_use_tool, tool_name, tool_input)
         """
-        import json
+        response_lower = response_text.lower()
         
-        # Check for tool usage patterns
-        if "TOOL:" in response_text and "ACTION:" in response_text:
+        # Pattern 1: Check for recommendation keywords
+        if any(keyword in response_lower for keyword in ["cari film", "rekomendasi", "film yang cocok", "pencarian film", "search movie"]):
+            return True, "get_recommendations_tool", response_text
+        
+        # Pattern 2: Check for streaming keywords
+        if any(keyword in response_lower for keyword in ["link streaming", "di mana nonton", "watch", "dimana nonton", "streaming"]):
+            # Extract movie title
+            lines = response_text.split('\n')
+            for line in lines:
+                if '"' in line or "'" in line:
+                    return True, "get_streaming_links_tool", line
+            return True, "get_streaming_links_tool", response_text
+        
+        # Pattern 3: Explicit tool markers
+        if "TOOL:" in response_text:
             try:
-                # Simple pattern matching for tool calls
                 lines = response_text.split('\n')
                 tool_name = None
                 tool_input = None
                 
-                for i, line in enumerate(lines):
+                for line in lines:
                     if "TOOL:" in line:
                         tool_name = line.split("TOOL:")[1].strip()
-                    elif "ACTION:" in line or "ARGUMENT:" in line:
+                    elif "ACTION:" in line or "INPUT:" in line:
                         tool_input = line.split(":", 1)[1].strip()
                 
                 if tool_name and tool_input:
@@ -314,54 +328,47 @@ class MovieTherapistAgent:
         
         Args:
             user_input: User's message
-            chat_history: List of previous messages in format [{"role": "user/assistant", "content": "..."}]
+            chat_history: List of previous messages
             
         Returns:
             Agent's response
         """
         try:
-            # Build system prompt
+            # System prompt
             system_prompt = """Anda adalah 'Movie Therapist' - seorang AI yang memahami emosi manusia dan merekomendasikan film yang sempurna untuk suasana hati mereka.
 
-Proses Anda:
-1. Dengarkan dan pahami mood/keadaan emosional user
-2. Jika perlu mencari film: tuliskan "TOOL: get_recommendations_tool" dan "ACTION: [mood/genre user]"
-3. Jika perlu cari link: tuliskan "TOOL: get_streaming_links_tool" dan "ACTION: [movie title]"
-4. Berikan ringkasan review film dengan bahasa santai dan dalam Bahasa Indonesia
+Instruksi:
+1. Pahami suasana hati/mood user
+2. Jika user minta rekomendasi: Selalu gunakan frasa "cari film berdasarkan mood" atau "film yang cocok"
+3. Jika user minta tahu di mana nonton: Selalu gunakan frasa "link streaming" atau "di mana nonton"
+4. Jelaskan dengan bahasa santai dan empatik dalam Bahasa Indonesia
+5. Gunakan emoji yang sesuai
 
-Gaya komunikasi Anda:
-- Empatik dan memahami
-- Santai dan ramah
-- Memberikan insight tentang mengapa film ini cocok untuk mood mereka
-- Gunakan emoji yang sesuai
-
-Available tools:
-1. get_recommendations_tool - Cari film berdasarkan mood
-2. get_streaming_links_tool - Cari link streaming film"""
+Prioritas: SELALU carikan rekomendasi film jika user menunjukkan emosi/mood apapun!"""
             
-            # Build conversation messages
-            messages = [
-                HumanMessage(content=system_prompt),
-            ]
+            # Build messages
+            messages = [HumanMessage(content=system_prompt)]
             
-            # Add chat history
-            for msg in chat_history[-3:]:  # Last 3 messages
+            # Add recent chat history (max 2 messages)
+            for msg in chat_history[-2:]:
                 if msg["role"] == "user":
                     messages.append(HumanMessage(content=msg["content"]))
                 else:
                     messages.append(AIMessage(content=msg["content"]))
             
-            # Add current user input
+            # Add current input
             messages.append(HumanMessage(content=user_input))
             
-            # Get LLM response
+            # Get initial response from LLM
+            st.write("🤖 Memproses dengan AI...")
             response = self.llm.invoke(messages)
             response_text = response.content
             
-            # Check if LLM wants to use a tool
-            max_iterations = 3
+            st.write(f"LLM Response: {response_text[:200]}...")
+            
+            # Check if we need to use tools
+            max_iterations = 2
             iteration = 0
-            tool_results = []
             
             while iteration < max_iterations:
                 should_use_tool, tool_name, tool_input = self._should_use_tool(response_text)
@@ -369,30 +376,35 @@ Available tools:
                 if not should_use_tool:
                     break
                 
-                # Execute tool if found
-                if tool_name and tool_name in self.tools_dict:
-                    try:
-                        tool_func = self.tools_dict[tool_name]
-                        # Call tool - handle both sync and methods
-                        if tool_name == "get_recommendations_tool":
-                            tool_result = self.get_recommendations_tool(tool_input)
-                        elif tool_name == "get_streaming_links_tool":
-                            tool_result = self.get_streaming_links_tool(tool_input)
-                        else:
-                            tool_result = str(tool_func(tool_input))
-                        
-                        tool_results.append(f"\nTool Result for {tool_name}:\n{tool_result}")
-                        
-                        # Ask LLM to continue with tool result
-                        messages.append(AIMessage(content=response_text))
-                        messages.append(HumanMessage(content=f"Tool result:\n{tool_result}\n\nPlease provide your response based on this information."))
-                        
-                        response = self.llm.invoke(messages)
-                        response_text = response.content
-                    except Exception as e:
-                        tool_results.append(f"Error executing {tool_name}: {str(e)}")
+                st.write(f"🔧 Using tool: {tool_name}")
+                
+                # Execute the appropriate tool
+                try:
+                    if tool_name == "get_recommendations_tool":
+                        # Use user input or extracted mood
+                        tool_result = self.get_recommendations_tool(user_input)
+                    elif tool_name == "get_streaming_links_tool":
+                        # Extract movie title from response or input
+                        movie_title = tool_input if tool_input != response_text else "unknown"
+                        tool_result = self.get_streaming_links_tool(movie_title)
+                    else:
                         break
-                else:
+                    
+                    st.write(f"✅ Tool result obtained")
+                    
+                    # Ask LLM to summarize tool result
+                    messages.append(AIMessage(content=response_text))
+                    summary_prompt = f"""Tool result untuk {tool_name}:
+{tool_result}
+
+Sekarang buatkan ringkasan yang ramah dan membantu untuk user. Dalam Bahasa Indonesia, santai, dan empatik."""
+                    messages.append(HumanMessage(content=summary_prompt))
+                    
+                    response = self.llm.invoke(messages)
+                    response_text = response.content
+                    
+                except Exception as e:
+                    st.error(f"Error executing tool: {str(e)}")
                     break
                 
                 iteration += 1
@@ -400,8 +412,10 @@ Available tools:
             return response_text
         
         except Exception as e:
-            error_msg = f"Error in chat turn: {str(e)}"
+            error_msg = f"❌ Error: {str(e)}"
             st.error(error_msg)
+            import traceback
+            st.write(traceback.format_exc())
             return error_msg
 
 
