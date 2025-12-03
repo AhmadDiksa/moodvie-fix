@@ -1,405 +1,428 @@
-"""
-Streamlit Movie Therapist Agent
-A conversational AI agent that analyzes user moods and recommends movies using an agentic architecture.
-"""
-
 import streamlit as st
 import os
 import requests
-from typing import Optional, List, Dict, Any
-from dotenv import load_dotenv
-
-# LangChain imports
+from qdrant_client import QdrantClient
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.tools import tool
-from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.prompts import PromptTemplate
+from langchain_core.output_parsers import StrOutputParser
 
-# Qdrant imports
-from qdrant_client import QdrantClient
-
-# Load environment variables
-load_dotenv()
-
-# =============================================================================
-# CONFIGURATION
-# =============================================================================
-
-QDRANT_COLLECTION = "moodviedb"
-EMBEDDING_MODEL = "all-MiniLM-L6-v2"
-VECTOR_SIZE = 384
-SIMILARITY_K = 3
-
-# =============================================================================
-# STREAMLIT PAGE CONFIGURATION
-# =============================================================================
+# ==========================================
+# 1. CONFIG & CSS INJECTION (CRITICAL)
+# ==========================================
 
 st.set_page_config(
-    page_title="🎬 Movie Therapist Agent",
+    page_title="Movie Therapist",
     page_icon="🎬",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed"
 )
 
-st.markdown("""
+# Netflix-inspired Dark Theme & Custom Card CSS
+custom_css = """
 <style>
-    .main {
-        padding: 2rem;
+    /* Global Reset & Dark Mode */
+    .stApp {
+        background-color: #141414;
+        color: #ffffff;
+        font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
     }
+    
+    /* Hide Streamlit Boilerplate */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden;}
+    .stDeployButton {display:none;}
+    
+    /* Remove default padding */
+    .block-container {
+        padding-top: 2rem;
+        padding-bottom: 5rem;
+        max-width: 1200px;
+    }
+
+    /* Chat Input Styling */
+    .stChatInput {
+        position: fixed;
+        bottom: 30px;
+        z-index: 100;
+    }
+    
+    .stChatInput input {
+        background-color: #333 !important;
+        color: white !important;
+        border: 1px solid #444 !important;
+    }
+
+    /* MOVIE CARD STYLING (Flexbox) */
     .movie-card {
-        background-color: #f0f2f6;
-        border-radius: 0.5rem;
-        padding: 1rem;
-        margin-bottom: 1rem;
+        display: flex;
+        background-color: #1f1f1f;
+        border-radius: 8px;
+        margin-bottom: 25px;
+        overflow: hidden;
+        transition: transform 0.3s ease, box-shadow 0.3s ease;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.5);
+        border: 1px solid #333;
+    }
+
+    .movie-card:hover {
+        transform: scale(1.01);
+        box-shadow: 0 0 15px rgba(229, 9, 20, 0.4); /* Netflix Red Glow */
+        border-color: #E50914;
+    }
+
+    .movie-poster-container {
+        flex: 0 0 200px;
+        position: relative;
+    }
+
+    .movie-poster {
+        width: 100%;
+        height: 300px;
+        object-fit: cover;
+        display: block;
+    }
+
+    .movie-details {
+        flex: 1;
+        padding: 20px;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+    }
+
+    .movie-header h2 {
+        margin: 0;
+        font-size: 1.8rem;
+        color: white;
+        font-weight: 700;
+    }
+
+    .movie-meta {
+        color: #a3a3a3;
+        font-size: 0.9rem;
+        margin-bottom: 15px;
+        display: flex;
+        gap: 15px;
+        align-items: center;
+    }
+
+    .meta-badge {
+        border: 1px solid #a3a3a3;
+        padding: 2px 6px;
+        border-radius: 4px;
+        font-size: 0.7rem;
+    }
+
+    /* Therapist/Netizen Note Box */
+    .netizen-box {
+        background: rgba(229, 9, 20, 0.1);
+        border-left: 4px solid #E50914;
+        padding: 10px 15px;
+        margin-bottom: 15px;
+        border-radius: 0 4px 4px 0;
+    }
+
+    .netizen-label {
+        color: #E50914;
+        font-weight: bold;
+        font-size: 0.8rem;
+        text-transform: uppercase;
+        margin-bottom: 5px;
+        display: block;
+    }
+
+    .netizen-text {
+        font-style: italic;
+        color: #e5e5e5;
+        font-size: 0.95rem;
+        line-height: 1.4;
+    }
+
+    /* Buttons */
+    .action-row {
+        display: flex;
+        gap: 10px;
+        margin-top: 10px;
+    }
+
+    .btn-stream {
+        background-color: #ffffff;
+        color: #000000;
+        padding: 8px 20px;
+        text-decoration: none;
+        border-radius: 4px;
+        font-weight: bold;
+        font-size: 0.9rem;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        transition: background 0.2s;
+    }
+
+    .btn-stream:hover {
+        background-color: #e6e6e6;
+        color: #000000;
+    }
+
+    .btn-details {
+        background-color: rgba(109, 109, 110, 0.7);
+        color: white;
+        padding: 8px 20px;
+        text-decoration: none;
+        border-radius: 4px;
+        font-weight: bold;
+        font-size: 0.9rem;
+        transition: background 0.2s;
+    }
+    
+    .btn-details:hover {
+        background-color: rgba(109, 109, 110, 0.4);
+        color: white;
+    }
+
+    /* Mobile Responsiveness */
+    @media (max-width: 768px) {
+        .movie-card {
+            flex-direction: column;
+        }
+        .movie-poster-container {
+            flex: 0 0 auto;
+        }
+        .movie-poster {
+            height: 200px;
+            width: 100%;
+        }
     }
 </style>
-""", unsafe_allow_html=True)
-
-# =============================================================================
-# SIDEBAR CONFIGURATION
-# =============================================================================
-
-with st.sidebar:
-    st.title("⚙️ Konfigurasi API")
-    st.markdown("---")
-    
-    # Google API Configuration
-    st.subheader("Google Generative AI")
-    google_api_key = st.text_input(
-        "Google API Key",
-        value=os.getenv("GOOGLE_API_KEY", ""),
-        type="password",
-        help="Dapatkan dari https://aistudio.google.com/app/apikeys"
-    )
-    
-    # Google Custom Search Configuration
-    st.subheader("Google Custom Search")
-    search_engine_id = st.text_input(
-        "Search Engine ID",
-        value=os.getenv("GOOGLE_SEARCH_ENGINE_ID", ""),
-        type="password",
-    )
-    search_api_key = st.text_input(
-        "Search API Key",
-        value=os.getenv("GOOGLE_SEARCH_API_KEY", ""),
-        type="password",
-    )
-    
-    # Qdrant Configuration
-    st.subheader("Qdrant Vector Database")
-    qdrant_url = st.text_input(
-        "Qdrant URL",
-        value=os.getenv("QDRANT_URL", "http://localhost:6333"),
-    )
-    qdrant_api_key = st.text_input(
-        "Qdrant API Key (jika perlu)",
-        value=os.getenv("QDRANT_API_KEY", ""),
-        type="password"
-    )
-    
-    st.markdown("---")
-    st.info("💡 Simpan API keys di file `.env` untuk keamanan lebih baik.")
+"""
+st.markdown(custom_css, unsafe_allow_html=True)
 
 
-# =============================================================================
-# MOVIETHERAPIST AGENT CLASS
-# =============================================================================
+# ==========================================
+# 2. CLASS `MovieTherapist` & LOGIC
+# ==========================================
 
-class MovieTherapistAgent:
-    """
-    Agentic Architecture for Movie Recommendations with Mood Analysis.
-    """
-    
-    def __init__(
-        self,
-        google_api_key: str,
-        search_engine_id: str,
-        search_api_key: str,
-        qdrant_url: str,
-        qdrant_api_key: Optional[str] = None,
-    ):
-        """Initialize the Movie Therapist Agent."""
+class MovieTherapist:
+    def __init__(self):
+        # 1. Initialize Embeddings
+        self.embeddings = HuggingFaceEmbeddings(model_name='all-MiniLM-L6-v2')
         
-        # Initialize LLM
-        self.llm = ChatGoogleGenerativeAI(
-            model="gemini-2.0-flash",
-            api_key=google_api_key,
-            temperature=0.7,
+        # 2. Initialize LLM (Gemini)
+        # Ensure GOOGLE_API_KEY is in env
+        try:
+            self.llm = ChatGoogleGenerativeAI(
+                model="gemini-2.0-flash",
+                temperature=0.7,
+                convert_system_message_to_human=True
+            )
+        except Exception as e:
+            st.error(f"LLM Initialization Error: {e}")
+
+        # 3. Initialize Qdrant
+        try:
+            self.qdrant = QdrantClient(
+                url=st.secrets["QDRANT_URL"],
+                api_key=st.secrets["QDRANT_API_KEY"]
+            )
+            self.collection_name = "moodviedb"
+        except Exception as e:
+            st.error(f"Qdrant Connection Error: {e}")
+
+    def get_streaming_link(self, movie_title):
+        """Tool: Link_Finder (Google Search)"""
+        try:
+            api_key = st.secrets["GOOGLE_API_KEY"]
+            cse_id = st.secrets["GOOGLE_CSE_ID"]
+        except KeyError:
+            return "https://www.google.com/search?q=" + movie_title.replace(" ", "+") + "+streaming"
+
+        search_query = f"watch {movie_title} online streaming"
+        url = f"https://www.googleapis.com/customsearch/v1?q={search_query}&key={api_key}&cx={cse_id}&num=1"
+
+        try:
+            response = requests.get(url)
+            data = response.json()
+            if "items" in data and len(data["items"]) > 0:
+                return data["items"][0]["link"]
+        except:
+            pass
+
+        # Fallback to generic search
+        return "https://www.google.com/search?q=" + movie_title.replace(" ", "+")
+
+    def generate_kata_netizen(self, title, raw_reviews):
+        """Feature: Dynamic Summarization in Bahasa Indonesia"""
+        prompt = PromptTemplate.from_template(
+            """
+            Act as a witty Indonesian social media movie reviewer.
+            Summarize these raw reviews for the movie '{title}' into a single, punchy paragraph (max 3 sentences).
+            Use slang (bahasa gaul), be expressive (e.g., "Gila sih", "Wajib tonton"), and convincing.
+            Label it as "KATA NETIZEN".
+            
+            Raw Reviews: {reviews}
+            
+            Output (Bahasa Indonesia only):
+            """
         )
-        
-        # Initialize Embeddings
-        self.embeddings = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL)
-        
-        # Initialize Qdrant Client
-        self.qdrant_client = QdrantClient(
-            url=qdrant_url,
-            api_key=qdrant_api_key if qdrant_api_key else None,
+        chain = prompt | self.llm | StrOutputParser()
+        try:
+            # Truncate reviews to fit context window if necessary
+            truncated_reviews = str(raw_reviews)[:2000]
+            return chain.invoke({"title": title, "reviews": truncated_reviews})
+        except Exception:
+            return "Kata Netizen: Film ini rame banget dibahas, coba cek sendiri deh!"
+
+    def retrieve_movies(self, mood_query):
+        """Tool: Mood_Retriever (Qdrant)"""
+        vector = self.embeddings.embed_query(mood_query)
+
+        results = self.qdrant.query_points(
+            collection_name=self.collection_name,
+            query=vector,
+            limit=3
         )
-        
-        # Store Search API credentials
-        self.search_engine_id = search_engine_id
-        self.search_api_key = search_api_key
-    
-    # ==========================================================================
-    # TOOL 1: MOOD_MOVIE_RETRIEVER
-    # ==========================================================================
-    
-    def get_recommendations(self, mood_query: str) -> str:
-        """
-        TOOL: Mood Movie Retriever
-        
-        Searches the Qdrant vector database for movies based on emotional state.
-        Returns movie details including title, plot, poster, and reviews.
-        """
-        try:
-            with st.spinner("🔍 Sedang mencari film yang cocok untuk suasana hati Anda..."):
-                # Embed the mood query
-                query_embedding = self.embeddings.embed_query(mood_query)
-                
-                # Search in Qdrant
-                search_results = self.qdrant_client.search(
-                    collection_name=QDRANT_COLLECTION,
-                    query_vector=query_embedding,
-                    limit=SIMILARITY_K,
-                    with_payload=True,
-                )
-                
-                # Format results
-                recommendations = []
-                for result in search_results:
-                    movie_data = {
-                        "title": result.payload.get("title", "N/A"),
-                        "plot": result.payload.get("plot", "N/A"),
-                        "poster": result.payload.get("poster_url", ""),
-                        "raw_reviews": result.payload.get("raw_reviews", ""),
-                        "genre": result.payload.get("genre", "N/A"),
-                        "rating": result.payload.get("rating", "N/A"),
-                    }
-                    recommendations.append(movie_data)
-                
-                return str(recommendations)
-        
-        except Exception as e:
-            error_msg = f"Error searching Qdrant: {str(e)}"
-            st.error(error_msg)
-            return error_msg
-    
-    # ==========================================================================
-    # TOOL 2: STREAMING_LINK_FINDER
-    # ==========================================================================
-    
-    def get_streaming_links(self, movie_title: str) -> str:
-        """
-        TOOL: Streaming Link Finder
-        
-        Uses Google Custom Search to find legal streaming links.
-        """
-        try:
-            with st.spinner(f"🔗 Sedang mencari link streaming untuk '{movie_title}'..."):
-                search_query = f"{movie_title} streaming link netflix disney+ prime video"
-                
-                url = "https://www.googleapis.com/customsearch/v1"
-                params = {
-                    "q": search_query,
-                    "cx": self.search_engine_id,
-                    "key": self.search_api_key,
-                    "num": 5,
-                }
-                
-                response = requests.get(url, params=params, timeout=10)
-                response.raise_for_status()
-                
-                results = response.json()
-                streaming_info = []
-                
-                if "items" in results:
-                    for item in results["items"][:3]:
-                        streaming_info.append({
-                            "title": item.get("title", "N/A"),
-                            "link": item.get("link", "N/A"),
-                            "snippet": item.get("snippet", "N/A"),
-                        })
-                
-                return str(streaming_info) if streaming_info else "Tidak menemukan link streaming."
-        
-        except Exception as e:
-            error_msg = f"Error searching for streaming links: {str(e)}"
-            st.warning(error_msg)
-            return error_msg
-    
-    # ==========================================================================
-    # AGENT LOGIC
-    # ==========================================================================
-    
-    def run_chat_turn(self, user_input: str, chat_history: List[Dict[str, str]]) -> str:
-        """
-        Run one turn of conversation with automatic tool calling.
-        """
-        try:
-            system_prompt = """Anda adalah 'Movie Therapist' - AI yang memahami emosi dan merekomendasikan film sempurna.
+        return results.points
 
-PENTING: Ketika user minta rekomendasi film atau menceritakan mood mereka:
-1. Pahami suasana hati mereka
-2. LANGSUNG gunakan frasa "cari film" atau "rekomendasi film" dalam respons Anda
-3. Ini akan trigger pencarian otomatis di database kami
-
-Jika user bertanya tentang streaming:
-- Gunakan frasa "link streaming" atau "di mana nonton"
-
-Gaya: Empatik, santai, ramah, Bahasa Indonesia, gunakan emoji."""
-            
-            # Build messages
-            messages = [HumanMessage(content=system_prompt)]
-            
-            # Add chat history (last 2 messages for context)
-            for msg in chat_history[-2:]:
-                if msg["role"] == "user":
-                    messages.append(HumanMessage(content=msg["content"]))
-                else:
-                    messages.append(AIMessage(content=msg["content"]))
-            
-            # Add current input
-            messages.append(HumanMessage(content=user_input))
-            
-            # Get initial response
-            response = self.llm.invoke(messages)
-            response_text = response.content
-            
-            # Check if tools should be called
-            response_lower = response_text.lower()
-            
-            # Tool 1: Recommendations
-            if any(keyword in response_lower for keyword in ["cari film", "rekomendasi", "film yang cocok", "pencarian"]):
-                tool_result = self.get_recommendations(user_input)
-                
-                # Ask LLM to summarize
-                messages.append(AIMessage(content=response_text))
-                summary_prompt = f"""Berdasarkan hasil pencarian film ini:
-{tool_result}
-
-Buatkan ringkasan yang ramah dan membantu untuk user. Sertakan:
-- Judul film yang cocok
-- Plot singkat
-- Mengapa film ini cocok untuk moodnya
-- Genre dan rating
-Gunakan Bahasa Indonesia, santai, dan empatik dengan emoji."""
-                messages.append(HumanMessage(content=summary_prompt))
-                
-                response = self.llm.invoke(messages)
-                response_text = response.content
-            
-            # Tool 2: Streaming links
-            elif any(keyword in response_lower for keyword in ["link streaming", "di mana nonton", "where to watch"]):
-                # Try to extract movie title
-                movie_title = user_input if len(user_input) < 50 else response_text
-                tool_result = self.get_streaming_links(movie_title)
-                
-                # Ask LLM to summarize
-                messages.append(AIMessage(content=response_text))
-                summary_prompt = f"""Hasil pencarian streaming link:
-{tool_result}
-
-Format ulang dalam Bahasa Indonesia yang ramah. Tunjukkan platform mana yang tersedia dan link-nya."""
-                messages.append(HumanMessage(content=summary_prompt))
-                
-                response = self.llm.invoke(messages)
-                response_text = response.content
-            
-            return response_text
+    def process_query(self, user_input):
+        """Orchestrator"""
         
-        except Exception as e:
-            error_msg = f"❌ Error: {str(e)}"
-            st.error(error_msg)
-            return error_msg
-
-
-# =============================================================================
-# STREAMLIT APP MAIN
-# =============================================================================
-
-def main():
-    """Main Streamlit application."""
-    
-    # Initialize session state
-    if "chat_history" not in st.session_state:
-        st.session_state.chat_history = []
-    
-    if "agent" not in st.session_state:
-        st.session_state.agent = None
-    
-    if "agent_initialized" not in st.session_state:
-        st.session_state.agent_initialized = False
-    
-    # Main title
-    st.title("🎬 Movie Therapist Agent")
-    st.markdown("*Temukan film yang sempurna berdasarkan suasana hati Anda*")
-    st.markdown("---")
-    
-    # Initialize agent if APIs are provided
-    if not st.session_state.agent_initialized:
-        if not google_api_key or not search_engine_id or not search_api_key:
-            st.error("❌ Mohon isi semua API key di sidebar untuk memulai!")
-            st.stop()
+        # 1. Check intent (Simple heuristic or LLM call - keeping simple for speed here)
+        # In a full agent, we'd use an AgentExecutor, but for UI control, we build the response manually.
         
-        try:
-            with st.spinner("🚀 Menginisialisasi Movie Therapist Agent..."):
-                st.session_state.agent = MovieTherapistAgent(
-                    google_api_key=google_api_key,
-                    search_engine_id=search_engine_id,
-                    search_api_key=search_api_key,
-                    qdrant_url=qdrant_url,
-                    qdrant_api_key=qdrant_api_key if qdrant_api_key else None,
-                )
-                st.session_state.agent_initialized = True
-            st.success("✅ Agent siap! Mulai bercerita tentang suasana hati Anda...")
-        except Exception as e:
-            st.error(f"❌ Gagal menginisialisasi agent: {str(e)}")
-            st.stop()
-    
-    # Display chat history
-    for message in st.session_state.chat_history:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
-    
-    # Chat input
-    if user_input := st.chat_input("Ceritakan tentang suasana hati Anda atau minta rekomendasi film..."):
-        
-        # Add user message to history
-        st.session_state.chat_history.append({
-            "role": "user",
-            "content": user_input,
-        })
-        
-        # Display user message
+        with st.spinner("Analyzing your mood..."):
+            # Retrieve movies
+            search_results = self.retrieve_movies(user_input)
+            
+            if not search_results:
+                return [{"type": "text", "content": "I couldn't find any movies matching that specific mood. Try something like 'feeling adventurous' or 'need a good laugh'."}]
+
+            response_data = []
+            
+            # Therapist Intro
+            intro_prompt = PromptTemplate.from_template(
+                "You are a movie therapist. The user feels: '{query}'. Write a very short, empathetic introductory sentence (1 sentence) acknowledging their feeling before presenting the movies."
+            )
+            intro_chain = intro_prompt | self.llm | StrOutputParser()
+            intro_text = intro_chain.invoke({"query": user_input})
+            
+            response_data.append({"type": "text", "content": intro_text})
+
+            # Process Cards
+            for hit in search_results:
+                payload = hit.payload
+                title = payload.get('title', 'Unknown Movie')
+                poster = payload.get('poster_url', 'https://via.placeholder.com/200x300?text=No+Poster')
+                year = payload.get('year', 'N/A')
+                genre = payload.get('genre', 'General')
+                raw_reviews = payload.get('raw_reviews', '')
+                
+                # Parallelizable in production, sequential here for simplicity
+                kata_netizen = self.generate_kata_netizen(title, raw_reviews)
+                link = self.get_streaming_link(title)
+                
+                card_html = f"""
+                <div class="movie-card">
+                    <div class="movie-poster-container">
+                        <img src="{poster}" class="movie-poster" alt="{title}">
+                    </div>
+                    <div class="movie-details">
+                        <div class="movie-header">
+                            <h2>{title}</h2>
+                            <div class="movie-meta">
+                                <span class="meta-badge">{year}</span>
+                                <span>{genre}</span>
+                            </div>
+                        </div>
+                        
+                        <div class="netizen-box">
+                            <span class="netizen-label">Kata Netizen</span>
+                            <span class="netizen-text">{kata_netizen}</span>
+                        </div>
+                        
+                        <div class="action-row">
+                            <a href="{link}" target="_blank" class="btn-stream">
+                                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                    <path d="M8 5V19L19 12L8 5Z" fill="black"/>
+                                </svg>
+                                Play
+                            </a>
+                            <a href="https://www.imdb.com/find?q={title}" target="_blank" class="btn-details">
+                                Details
+                            </a>
+                        </div>
+                    </div>
+                </div>
+                """
+                response_data.append({"type": "html", "content": card_html})
+                
+            return response_data
+
+# ==========================================
+# 3. STREAMLIT SESSION STATE MANAGEMENT
+# ==========================================
+
+if "messages" not in st.session_state:
+    st.session_state.messages = [
+        {"role": "assistant", "content": "Welcome. I understand life can be overwhelming. Tell me how you're feeling, or what you're doing right now (e.g., 'aku gabut', 'heartbroken', 'need inspiration'), and I'll prescribe the perfect cinema therapy."}
+    ]
+
+# Initialize Therapist Agent
+@st.cache_resource
+def get_agent():
+    return MovieTherapist()
+
+agent = get_agent()
+
+# ==========================================
+# 4. MAIN UI LOOP
+# ==========================================
+
+# Display Header (Minimalist)
+st.markdown("<h1 style='color: #E50914; font-weight: 900; letter-spacing: -2px; margin-bottom: 30px;'>MOVIE <span style='color: white;'>THERAPIST</span></h1>", unsafe_allow_html=True)
+
+# Render Chat History
+for message in st.session_state.messages:
+    if message["role"] == "user":
+        # User Bubble
         with st.chat_message("user"):
-            st.markdown(user_input)
+            st.write(message["content"])
+    else:
+        # Assistant Bubble (Handle Text vs HTML)
+        with st.chat_message("assistant", avatar="🤖"):
+            if isinstance(message["content"], list):
+                # It's a rich response with cards
+                for item in message["content"]:
+                    if item["type"] == "text":
+                        st.markdown(f"<p style='font-size: 1.1rem; color: #ccc; margin-bottom: 20px;'>{item['content']}</p>", unsafe_allow_html=True)
+                    elif item["type"] == "html":
+                        st.markdown(item["content"], unsafe_allow_html=True)
+            else:
+                # Simple text response
+                st.write(message["content"])
+
+# Chat Input
+if prompt := st.chat_input("How are you feeling today?"):
+    # 1. Add user message
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    with st.chat_message("user"):
+        st.write(prompt)
+
+    # 2. Generate response
+    with st.chat_message("assistant", avatar="🤖"):
+        # Process via Agent
+        response_payload = agent.process_query(prompt)
         
-        # Get agent response
-        with st.chat_message("assistant"):
-            message_placeholder = st.empty()
-            
-            try:
-                response = st.session_state.agent.run_chat_turn(
-                    user_input,
-                    st.session_state.chat_history[:-1],
-                )
-                
-                message_placeholder.markdown(response)
-                
-                # Add assistant message to history
-                st.session_state.chat_history.append({
-                    "role": "assistant",
-                    "content": response,
-                })
-            
-            except Exception as e:
-                error_response = f"❌ Error: {str(e)}"
-                message_placeholder.error(error_response)
-                st.session_state.chat_history.append({
-                    "role": "assistant",
-                    "content": error_response,
-                })
+        # Render immediately
+        for item in response_payload:
+            if item["type"] == "text":
+                st.markdown(f"<p style='font-size: 1.1rem; color: #ccc; margin-bottom: 20px;'>{item['content']}</p>", unsafe_allow_html=True)
+            elif item["type"] == "html":
+                st.markdown(item["content"], unsafe_allow_html=True)
+    
+    # 3. Save to history
+    st.session_state.messages.append({"role": "assistant", "content": response_payload})
 
-
-if __name__ == "__main__":
-    main()
+# Add a spacer at the bottom so the last card isn't hidden by the input box
+st.markdown("<div style='height: 100px;'></div>", unsafe_allow_html=True)
