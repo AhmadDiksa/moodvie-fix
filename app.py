@@ -320,8 +320,26 @@ class MovieTherapistAgent:
             temperature=0.7,
         )
         
-        # Initialize Embeddings
-        self.embeddings = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL)
+        # Initialize Embeddings with proper device settings
+        try:
+            self.embeddings = HuggingFaceEmbeddings(
+                model_name=EMBEDDING_MODEL,
+                model_kwargs={
+                    "device": "cpu",  # Force CPU to avoid meta tensor issues
+                },
+                encode_kwargs={
+                    "normalize_embeddings": True,
+                }
+            )
+        except Exception as e:
+            # Fallback without device specification
+            st.warning(f"⚠️ Embeddings initialization with device failed, using default: {str(e)}")
+            self.embeddings = HuggingFaceEmbeddings(
+                model_name=EMBEDDING_MODEL,
+                encode_kwargs={
+                    "normalize_embeddings": True,
+                }
+            )
         
         # Initialize Qdrant Client
         self.qdrant_client = QdrantClient(
