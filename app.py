@@ -5,7 +5,7 @@ from core.backend import Config, MoodAnalyzerTool, QdrantSearcher, ReviewSummari
 
 # --- 1. KONFIGURASI HALAMAN ---
 st.set_page_config(
-    page_title="Movie Therapist",
+    page_title="Moodvie Ai",
     page_icon="🍿",
     layout="wide",
     initial_sidebar_state="collapsed"
@@ -238,7 +238,7 @@ if not st.session_state.is_ready:
 st.markdown("""
     <div class="custom-header">
         <div class="brand-logo">
-            <span>📼</span> MOVIE THERAPIST
+           MOODVIE AI
         </div>
         <div class="powered-by">
             POWERED BY GEMINI 2.5
@@ -252,7 +252,7 @@ if not st.session_state.messages:
     # Tampilan Awal: Judul Besar di Tengah (HTML)
     st.markdown("""
         <div class="hero-container">
-            <div class="hero-title">MOVIE THERAPIST</div>
+            <div class="hero-title">MOODVIE AI</div>
             <div class="hero-subtitle">
                 Tell me how you're feeling, and I'll prescribe the perfect cinema therapy.<br>
                 Try: <i>"I need motivation"</i> or <i>"I want a good cry"</i>
