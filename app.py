@@ -1,574 +1,337 @@
 import streamlit as st
-import os
-import requests
-from typing import List
-from qdrant_client import QdrantClient
-from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
-from langchain_qdrant import QdrantVectorStore
-from langchain_core.prompts import PromptTemplate
-from langchain_core.output_parsers import JsonOutputParser, StrOutputParser
-from pydantic import BaseModel, Field
+import time
+from core.backend import Config, MoodAnalyzerTool, QdrantSearcher, ReviewSummarizer, StreamingFinder, MovieRecommenderAgent
 
-# ==========================================
-# 1. CONFIG & CSS INJECTION (CRITICAL)
-# ==========================================
-
+# --- 1. KONFIGURASI HALAMAN ---
 st.set_page_config(
     page_title="Movie Therapist",
-    page_icon="🎬",
+    page_icon="🍿",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
 
-# Netflix-inspired Dark Theme & Custom Card CSS
-custom_css = """
+# --- INJECT CSS CUSTOM ---
+def load_css(file_name):
+    try:
+        with open(file_name) as f:
+            st.markdown(f'<style>{f.read()}</style>', unsafe_allow_html=True)
+    except FileNotFoundError:
+        pass
+
+load_css("assets/style.css")
+
+# --- INJECT CSS TAMBAHAN UNTUK CONSISTENCY KARTU NATIVE ---
+st.markdown("""
 <style>
-    /* Global Reset & Dark Mode */
-    .stApp {
-        background-color: #141414;
-        color: #ffffff;
-        font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
-    }
-    
-    /* Hide Streamlit Boilerplate */
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-    header {visibility: hidden;}
-    .stDeployButton {display:none;}
-    
-    /* Remove default padding */
-    .block-container {
-        padding-top: 2rem;
-        padding-bottom: 5rem;
-        max-width: 1200px;
-    }
-
-    /* Chat Input Styling */
-    .stChatInput {
-        position: fixed;
-        bottom: 30px;
-        z-index: 100;
-    }
-    
-    .stChatInput input {
-        background-color: #333 !important;
-        color: white !important;
-        border: 1px solid #444 !important;
-    }
-
-    /* MOVIE CARD STYLING (Flexbox) */
-    .movie-card {
-        display: flex;
-        background-color: #1f1f1f;
-        border-radius: 8px;
-        margin-bottom: 25px;
-        overflow: hidden;
-        transition: transform 0.3s ease, box-shadow 0.3s ease;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.5);
-        border: 1px solid #333;
-    }
-
-    .movie-card:hover {
-        transform: scale(1.01);
-        box-shadow: 0 0 15px rgba(229, 9, 20, 0.4); /* Netflix Red Glow */
-        border-color: #E50914;
-    }
-
-    .movie-poster-container {
-        flex: 0 0 200px;
-        position: relative;
-    }
-
-    .movie-poster {
-        width: 100%;
-        height: 300px;
-        object-fit: cover;
-        display: block;
-    }
-
-    .movie-details {
-        flex: 1;
-        padding: 20px;
+    /* Paksa tinggi minimum kartu native agar sejajar */
+    [data-testid="stVerticalBlockBorderWrapper"] {
+        height: 520px; /* Tinggi FIXED */
         display: flex;
         flex-direction: column;
         justify-content: space-between;
-    }
-
-    .movie-header h2 {
-        margin: 0;
-        font-size: 1.8rem;
-        color: white;
-        font-weight: 700;
-    }
-
-    .movie-meta {
-        color: #a3a3a3;
-        font-size: 0.9rem;
-        margin-bottom: 15px;
-        display: flex;
-        gap: 15px;
-        align-items: center;
-    }
-
-    .meta-badge {
-        border: 1px solid #a3a3a3;
-        padding: 2px 6px;
-        border-radius: 4px;
-        font-size: 0.7rem;
-    }
-
-    /* Therapist/Netizen Note Box */
-    .netizen-box {
-        background: rgba(229, 9, 20, 0.1);
-        border-left: 4px solid #E50914;
-        padding: 10px 15px;
-        margin-bottom: 15px;
-        border-radius: 0 4px 4px 0;
-    }
-
-    .netizen-label {
-        color: #E50914;
-        font-weight: bold;
-        font-size: 0.8rem;
-        text-transform: uppercase;
-        margin-bottom: 5px;
-        display: block;
-    }
-
-    .netizen-text {
-        font-style: italic;
-        color: #e5e5e5;
-        font-size: 0.95rem;
-        line-height: 1.4;
-    }
-
-    /* Buttons */
-    .action-row {
-        display: flex;
-        gap: 10px;
-        margin-top: 10px;
-    }
-
-    .btn-stream {
-        background-color: #ffffff;
-        color: #000000;
-        padding: 8px 20px;
-        text-decoration: none;
-        border-radius: 4px;
-        font-weight: bold;
-        font-size: 0.9rem;
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        transition: background 0.2s;
-    }
-
-    .btn-stream:hover {
-        background-color: #e6e6e6;
-        color: #000000;
-    }
-
-    .btn-details {
-        background-color: rgba(109, 109, 110, 0.7);
-        color: white;
-        padding: 8px 20px;
-        text-decoration: none;
-        border-radius: 4px;
-        font-weight: bold;
-        font-size: 0.9rem;
-        transition: background 0.2s;
+        padding: 0 !important; /* Hilangkan padding default container */
+        overflow: hidden;
     }
     
-    .btn-details:hover {
-        background-color: rgba(109, 109, 110, 0.4);
-        color: white;
+    /* Area Konten Atas (Poster + Judul) */
+    [data-testid="stVerticalBlockBorderWrapper"] > div:first-child {
+        flex-grow: 1;
+        display: flex;
+        flex-direction: column;
+        gap: 0px;
     }
 
-    /* Mobile Responsiveness */
-    @media (max-width: 768px) {
-        .movie-card {
-            flex-direction: column;
-        }
-        .movie-poster-container {
-            flex: 0 0 auto;
-        }
-        .movie-poster {
-            height: 200px;
-            width: 100%;
-        }
+    /* Padding manual untuk konten teks di dalam kartu native */
+    .native-card-content {
+        padding: 15px;
+        display: flex;
+        flex-direction: column;
+        flex-grow: 1;
+    }
+
+    /* Styling Gambar di Native Card */
+    [data-testid="stVerticalBlockBorderWrapper"] img {
+        width: 100%;
+        height: 250px; /* Tinggi poster fix */
+        object-fit: cover; /* Crop agar rapi */
+        border-radius: 0 !important; /* Hilangkan radius default gambar */
+    }
+
+    /* Tombol Full Width di Bawah */
+    .stButton {
+        padding: 10px 15px;
+        margin-top: auto;
+    }
+    .stButton button {
+        width: 100%;
+        border-radius: 4px;
+        font-weight: 600;
+        background-color: #222;
+        color: #fff;
+        border: 1px solid #333;
+    }
+    .stButton button:hover {
+        border-color: #D32F2F;
+        color: #D32F2F;
+        background-color: #1a1a1a;
     }
 </style>
-"""
-st.markdown(custom_css, unsafe_allow_html=True)
+""", unsafe_allow_html=True)
 
 
-# ==========================================
-# 2. DATA MODELS (Pydantic)
-# ==========================================
+# --- 2. FUNGSI POP-UP DETAIL (st.dialog) ---
+@st.dialog("🎬 Detail Film & Analisis")
+def show_movie_details(movie):
+    st.header(movie.get('title', 'Unknown'))
+    
+    col_img, col_info = st.columns([1.5, 3])
+    
+    with col_img:
+        payload = movie.get('payload', {})
+        poster_url = movie.get('poster_url') or payload.get('poster_url')
+        img_src = poster_url if poster_url else "https://via.placeholder.com/500x750?text=No+Poster"
+        st.image(img_src, use_container_width=True)
+        
+        score = movie.get('score', 0)
+        release_date = movie.get('release_date', '????')
+        year = release_date.split('-')[0] if release_date else '????'
+        st.caption(f"⭐ **{score:.1f}/10** | 📅 **{year}**")
 
-class MoodAnalysis(BaseModel):
-    detected_moods: List[str] = Field(description="List of detected emotions")
-    summary: str = Field(description="Short empathetic summary of user's feeling")
-    search_keywords: str = Field(description="A detailed English plot description for Qdrant vector search")
+        trailer_url = payload.get('trailer_url') or payload.get('trailer')
+        if trailer_url and trailer_url != '#':
+            st.link_button("▶ Tonton Trailer", trailer_url, use_container_width=True)
+    
+    with col_info:
+        genres = movie.get('genres', [])
+        st.markdown(f"**Genre:** {', '.join(genres)}")
+        st.divider()
+
+        st.markdown("##### 🩺 Therapist's Note")
+        overview = movie.get('overview', 'No description available.')
+        st.write(overview)
+        
+        if 'review_snippet' in movie:
+            st.markdown("##### 🗣️ Kata Netizen (Gemini Summary)")
+            st.info(f"_{movie['review_snippet']}_")
+        
+        st.markdown("##### 📺 Streaming")
+        platform_name = movie.get('platform_name', 'Not Checked')
+        if platform_name and platform_name != "Not Available":
+            st.success(f"Tersedia di: **{platform_name}**")
+        else:
+            st.warning("Tidak ditemukan di layanan streaming legal utama region ID.")
 
 
-# ==========================================
-# 3. CLASS `MovieChatbot` & LOGIC WITH QDRANT
-# ==========================================
+# --- 3. FUNGSI RENDER KARTU FILM (NATIVE GRID) ---
+def render_movie_grid(movies):
+    if not movies:
+        return
 
-class MovieChatbot:
-    def __init__(self):
-        """Initialize MovieChatbot dengan Qdrant dan Google Embeddings"""
-        print("\n🤖 MENYIAPKAN CHATBOT...")
+    # Spacer agar tidak nempel header
+    st.write("") 
 
-        try:
-            qdrant_config = {
-                'url': st.secrets.get("QDRANT_URL"),
-                'api_key': st.secrets.get("QDRANT_API_KEY"),
-                'collection': st.secrets.get("QDRANT_COLLECTION", "moodviedb")
-            }
-        except Exception as e:
-            st.error(f"❌ Konfigurasi Qdrant belum lengkap: {e}")
-            qdrant_config = None
-
-        # --- TENTUKAN MODE: QDRANT ONLY ---
-        self.mode = "QDRANT"
-        print("🟠 Mode: QDRANT DATABASE (Vector Search dengan Google Embeddings)")
-
-        if not qdrant_config or not qdrant_config.get('url'):
-            raise ValueError("❌ Konfigurasi Qdrant belum lengkap!")
-
-        # --- INISIALISASI GOOGLE EMBEDDINGS (768 DIMENSI) ---
-        print("🔌 Menggunakan Google Embeddings (models/text-embedding-004)...")
-        self.embeddings = GoogleGenerativeAIEmbeddings(model="models/text-embedding-004")
-
-        # --- INISIALISASI QDRANT VECTOR STORE ---
-        client = QdrantClient(
-            url=qdrant_config['url'],
-            api_key=qdrant_config['api_key'] if qdrant_config['api_key'] else None
-        )
-        self.vector_store = QdrantVectorStore(
-            client=client,
-            collection_name=qdrant_config['collection'],
-            embedding=self.embeddings
-        )
-
-        # --- SETUP GEMINI AI ---
-        self.llm = ChatGoogleGenerativeAI(model="gemini-2.0-flash", temperature=0.7)
-        self.parser = JsonOutputParser(pydantic_object=MoodAnalysis)
-
-        # --- SETUP PROMPT UNTUK ANALISIS MOOD ---
-        self.prompt = PromptTemplate(
-            template="""You are a Movie Therapist.
-User Input: "{user_input}"
-History: "{chat_history}"
-
-Task: Analyze the user's mood and generate search parameters for finding the perfect movie.
-IMPORTANT: For 'search_keywords', write a detailed paragraph describing the plot atmosphere and emotional tone to match vector embeddings. Be specific about the emotional journey and themes.
-
-{format_instructions}""",
-            input_variables=["user_input", "chat_history"],
-            partial_variables={"format_instructions": self.parser.get_format_instructions()}
-        )
-        self.chain = self.prompt | self.llm | self.parser
-        self.chat_history = []
-
-    def get_streaming_link(self, movie_title):
-        """Tool: Link_Finder (Google Custom Search)"""
-        try:
-            api_key = st.secrets.get("GOOGLE_API_KEY")
-            cse_id = st.secrets.get("GOOGLE_CSE_ID")
-        except:
-            return "https://www.google.com/search?q=" + movie_title.replace(" ", "+") + "+streaming"
-
-        if not api_key or not cse_id:
-            return "https://www.google.com/search?q=" + movie_title.replace(" ", "+")
-
-        search_query = f'watch "{movie_title}" movie streaming legal'
-        url = "https://www.googleapis.com/customsearch/v1"
-        params = {"key": api_key, "cx": cse_id, "q": search_query, "num": 5}
-
-        try:
-            res = requests.get(url, params=params).json()
-            links = []
-            allowed_domains = ["netflix", "disneyplus", "hotstar", "vidio", "primevideo", 
-                             "viu", "wetv", "iq", "catchplay", "hbo", "apple"]
-            
-            if "items" in res:
-                for item in res["items"]:
-                    link = item.get("link", "").lower()
-                    if any(dom in link for dom in allowed_domains) and "/browse" not in link:
-                        links.append({"title": item.get("title", "Streaming Link"), "link": item["link"]})
-            
-            return links[:2] if links else None
-        except Exception as e:
-            print(f"Search Error: {e}")
-            return None
-
-    def generate_kata_netizen(self, title, overview):
-        """Feature: Dynamic Summarization in Bahasa Indonesia"""
-        prompt_template = PromptTemplate.from_template(
-            """Act as a witty Indonesian social media movie reviewer.
-Summarize this movie description for '{title}' into a single, punchy paragraph (max 3 sentences).
-Use slang (bahasa gaul), be expressive (e.g., "Gila sih", "Wajib tonton"), and convincing.
-            
-Movie Description: {overview}
-            
-Output (Bahasa Indonesia only):"""
-        )
-        chain = prompt_template | self.llm | StrOutputParser()
-        try:
-            truncated_overview = str(overview)[:1000]
-            return chain.invoke({"title": title, "overview": truncated_overview})
-        except Exception:
-            return "Film ini rame banget dibahas, coba cek sendiri deh!"
-
-    def retrieve_movies(self, query):
-        """Retrieve movies dari Qdrant berdasarkan mood query"""
-        try:
-            docs = self.vector_store.similarity_search(query, k=3)
-            results = []
-            for doc in docs:
-                results.append({
-                    "title": doc.metadata.get("title", "Unknown"),
-                    "year": str(doc.metadata.get("release_date", ""))[:4],
-                    "rating": doc.metadata.get("vote_average", 0),
-                    "overview": doc.metadata.get("overview", ""),
-                    "poster_url": doc.metadata.get("poster_url", "https://via.placeholder.com/200x300?text=No+Poster"),
-                    "genre": doc.metadata.get("genre", ""),
-                    "vote_count": doc.metadata.get("vote_count", 0)
-                })
-            return results
-        except Exception as e:
-            print(f"Qdrant Retrieval Error: {e}")
-            return []
-
-    def process_query(self, user_input):
-        """Orchestrator: Analyze mood dan retrieve movies"""
-        try:
-            # 1. Analyze mood
-            hist_str = "\n".join([f"{r}: {m}" for r, m in self.chat_history[-3:]])
-            analysis = self.chain.invoke({"user_input": user_input, "chat_history": hist_str})
-            
-            # Update chat history
-            self.chat_history.append(("User", user_input))
-            self.chat_history.append(("System", analysis['summary']))
-            
-            # 2. Retrieve movies
-            search_results = self.retrieve_movies(analysis['search_keywords'])
-            
-            if not search_results:
-                return {
-                    "mood_summary": analysis['summary'],
-                    "detected_moods": analysis['detected_moods'],
-                    "movies": [],
-                    "error": "Tidak ada film yang cocok ditemukan"
-                }
-            
-            # 3. Process each movie
-            processed_movies = []
-            for movie in search_results:
-                kata_netizen = self.generate_kata_netizen(movie['title'], movie['overview'])
-                streaming_links = self.get_streaming_link(movie['title'])
+    cols = st.columns(3)
+    
+    for idx, movie in enumerate(movies):
+        with cols[idx % 3]:
+            # Container Native (Styled via CSS di atas)
+            with st.container(border=True):
+                # A. Poster (Full Width via CSS)
+                payload = movie.get('payload', {})
+                poster_url = movie.get('poster_url') or payload.get('poster_url')
+                img_src = poster_url if poster_url else "https://via.placeholder.com/500x750?text=No+Poster"
                 
-                processed_movies.append({
-                    "title": movie['title'],
-                    "year": movie['year'],
-                    "rating": movie['rating'],
-                    "overview": movie['overview'],
-                    "poster_url": movie['poster_url'],
-                    "genre": movie['genre'],
-                    "vote_count": movie['vote_count'],
-                    "kata_netizen": kata_netizen,
-                    "streaming_links": streaming_links
-                })
-            
-            return {
-                "mood_summary": analysis['summary'],
-                "detected_moods": analysis['detected_moods'],
-                "movies": processed_movies,
-                "error": None
-            }
-            
-        except Exception as e:
-            print(f"Process Query Error: {e}")
-            return {
-                "mood_summary": "Terjadi kesalahan dalam menganalisis mood Anda.",
-                "detected_moods": [],
-                "movies": [],
-                "error": str(e)
-            }
+                # Render Gambar Native
+                st.image(img_src, use_container_width=True)
+                
+                # B. Konten Teks (Judul & Info)
+                # Judul dipotong agar tinggi konsisten
+                title = movie.get('title', 'Unknown')
+                if len(title) > 40:
+                    title = title[:37] + "..."
+                
+                genres = movie.get('genres', [])[:2]
+                score = movie.get('score', 0)
+                
+                # Menggunakan Markdown native untuk isi kartu
+                st.markdown(f"##### {title}")
+                st.caption(f"⭐ {score:.1f} | 🎭 {', '.join(genres)}")
+                
+                # Spacer
+                st.markdown('<div style="flex-grow:1"></div>', unsafe_allow_html=True)
+                
+                # C. Tombol Detail Native
+                if st.button("📄 LIHAT DETAIL", key=f"btn_{idx}", use_container_width=True):
+                    show_movie_details(movie)
 
-# ==========================================
-# 4. STREAMLIT SESSION STATE MANAGEMENT
-# ==========================================
 
+# --- 4. SESSION STATE ---
 if "messages" not in st.session_state:
-    st.session_state.messages = [
-        {"role": "assistant", "content": "Welcome. I understand life can be overwhelming. Tell me how you're feeling, or what you're doing right now (e.g., 'aku gabut', 'heartbroken', 'need inspiration'), and I'll prescribe the perfect cinema therapy."}
-    ]
+    st.session_state.messages = []
 
-# Initialize Chatbot Agent
-@st.cache_resource
-def get_agent():
-    return MovieChatbot()
+# --- 5. CUSTOM HEADER (HTML) ---
+# Header menggunakan HTML agar persis desain
+st.markdown("""
+    <div class="custom-header">
+        <div class="brand-logo">
+            <span>📼</span> MOVIE THERAPIST
+        </div>
+        <div class="powered-by">
+            POWERED BY GEMINI 2.5
+        </div>
+    </div>
+""", unsafe_allow_html=True)
 
-agent = get_agent()
 
-# ==========================================
-# 5. MAIN UI LOOP
-# ==========================================
+# --- 6. HERO SECTION VS CHAT MODE ---
+if not st.session_state.messages:
+    # Tampilan Awal: Judul Besar di Tengah (HTML)
+    st.markdown("""
+        <div class="hero-container">
+            <div class="hero-title">MOVIE THERAPIST</div>
+            <div class="hero-subtitle">
+                Tell me how you're feeling, and I'll prescribe the perfect cinema therapy.<br>
+                Try: <i>"I need motivation"</i> or <i>"I want a good cry"</i>
+            </div>
+        </div>
+    """, unsafe_allow_html=True)
+else:
+    # Mode Chat: Spacer kecil
+    st.write("")
 
-# Display Header (Minimalist)
-st.markdown("<h1 style='color: #E50914; font-weight: 900; letter-spacing: -2px; margin-bottom: 30px;'>MOVIE <span style='color: white;'>THERAPIST</span></h1>", unsafe_allow_html=True)
 
-# Render Chat History
+# --- 7. SIDEBAR CONFIG ---
+with st.sidebar:
+    st.header("⚙️ Configuration")
+    if "QDRANT_URL" not in st.secrets or "QDRANT_API_KEY" not in st.secrets:
+        st.error("Missing Qdrant Secrets")
+        st.stop()
+    
+    with st.expander("🔐 API Keys Settings", expanded=True):
+        gemini_key = st.text_input("Gemini API Key", type="password")
+        default_tmdb = st.secrets.get("TMDB_API_KEY", "")
+        tmdb_key = st.text_input("TMDB API Key", value=default_tmdb, type="password")
+
+    if st.button("Reconnect System", use_container_width=True):
+        if gemini_key:
+            try:
+                Config.initialize(
+                    gemini_key=gemini_key,
+                    qdrant_url=st.secrets["QDRANT_URL"],
+                    qdrant_key=st.secrets["QDRANT_API_KEY"],
+                    tmdb_key=tmdb_key if tmdb_key else None
+                )
+                st.session_state.agent = MovieRecommenderAgent(
+                    mood_tool=MoodAnalyzerTool(),
+                    qdrant_searcher=QdrantSearcher(),
+                    review_summarizer=ReviewSummarizer(),
+                    streaming_finder=StreamingFinder
+                )
+                st.session_state.is_ready = True
+                st.success("Connected!")
+                time.sleep(1)
+                st.rerun()
+            except Exception as e:
+                st.error(f"Error: {e}")
+
+# --- 8. CHAT HISTORY (RENDER NATIVE) ---
 for message in st.session_state.messages:
     if message["role"] == "user":
-        # User Bubble
-        with st.chat_message("user"):
-            st.write(message["content"])
+        # Pesan user simpel
+        pass 
     else:
-        # Assistant Bubble
-        with st.chat_message("assistant", avatar="🤖"):
-            content = message["content"]
-            
-            # Render based on content type
-            if isinstance(content, dict):
-                # Rich response with mood analysis and movie cards
-                if content.get("error"):
-                    st.error(f"❌ {content['error']}")
-                else:
-                    # Show mood summary
-                    st.markdown(f"<p style='font-size: 1.1rem; color: #ccc; margin-bottom: 20px;'>{content['mood_summary']}</p>", unsafe_allow_html=True)
-                    
-                    # Show detected moods
-                    mood_badges = " ".join([f"🎭 {mood}" for mood in content.get('detected_moods', [])])
-                    if mood_badges:
-                        st.markdown(f"<p style='font-size: 0.9rem; color: #E50914; margin-bottom: 20px;'>{mood_badges}</p>", unsafe_allow_html=True)
-                    
-                    # Show movie cards
-                    for movie in content.get('movies', []):
-                        rating_stars = "⭐" * int(movie['rating'] / 2) if movie['rating'] else "N/A"
-                        
-                        streaming_html = ""
-                        if movie.get('streaming_links'):
-                            streaming_html = "<div style='margin-top: 10px;'><p style='color: #E50914; font-weight: bold; font-size: 0.9rem;'>🌐 Streaming:</p>"
-                            for link in movie['streaming_links']:
-                                streaming_html += f"<p style='font-size: 0.85rem; margin: 5px 0;'><a href='{link['link']}' target='_blank' style='color: #4da6ff; text-decoration: none;'>{link['title']}</a></p>"
-                            streaming_html += "</div>"
-                        
-                        card_html = f"""
-                        <div class="movie-card">
-                            <div class="movie-poster-container">
-                                <img src="{movie['poster_url']}" class="movie-poster" alt="{movie['title']}">
-                            </div>
-                            <div class="movie-details">
-                                <div class="movie-header">
-                                    <h2>{movie['title']}</h2>
-                                    <div class="movie-meta">
-                                        <span class="meta-badge">{movie['year']}</span>
-                                        <span>{movie['genre']}</span>
-                                        <span>{rating_stars}</span>
-                                    </div>
-                                </div>
-                                
-                                <div class="netizen-box">
-                                    <span class="netizen-label">Kata Netizen</span>
-                                    <span class="netizen-text">{movie['kata_netizen']}</span>
-                                </div>
-                                
-                                <p style='color: #a3a3a3; font-size: 0.9rem; margin: 10px 0;'>{movie['overview'][:200]}...</p>
-                                
-                                <div class="action-row">
-                                    <a href="https://www.imdb.com/find?q={movie['title'].replace(' ', '+')}" target="_blank" class="btn-details">
-                                        📖 Details
-                                    </a>
-                                </div>
-                                {streaming_html}
-                            </div>
-                        </div>
-                        """
-                        st.markdown(card_html, unsafe_allow_html=True)
-            else:
-                # Simple text response
-                st.write(content)
-
-# Chat Input
-if prompt := st.chat_input("How are you feeling today?"):
-    # 1. Add user message
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
-        st.write(prompt)
-
-    # 2. Generate response
-    with st.chat_message("assistant", avatar="🤖"):
-        with st.spinner("🤔 Menganalisis mood Anda..."):
-            # Process via Agent
-            response_payload = agent.process_query(prompt)
+        # Pesan AI
+        if "content" in message:
+            # Render HTML text untuk judul "Prescription for..."
+            st.markdown(message["content"], unsafe_allow_html=True)
         
-        # Render response
-        if response_payload.get("error"):
-            st.error(f"❌ {response_payload['error']}")
-        else:
-            # Show mood summary
-            st.markdown(f"<p style='font-size: 1.1rem; color: #ccc; margin-bottom: 20px;'>{response_payload['mood_summary']}</p>", unsafe_allow_html=True)
-            
-            # Show detected moods
-            mood_badges = " ".join([f"🎭 {mood}" for mood in response_payload.get('detected_moods', [])])
-            if mood_badges:
-                st.markdown(f"<p style='font-size: 0.9rem; color: #E50914; margin-bottom: 20px;'>{mood_badges}</p>", unsafe_allow_html=True)
-            
-            # Show movie cards
-            if response_payload.get('movies'):
-                for movie in response_payload['movies']:
-                    rating_stars = "⭐" * int(movie['rating'] / 2) if movie['rating'] else "N/A"
-                    
-                    streaming_html = ""
-                    if movie.get('streaming_links'):
-                        streaming_html = "<div style='margin-top: 10px;'><p style='color: #E50914; font-weight: bold; font-size: 0.9rem;'>🌐 Streaming:</p>"
-                        for link in movie['streaming_links']:
-                            streaming_html += f"<p style='font-size: 0.85rem; margin: 5px 0;'><a href='{link['link']}' target='_blank' style='color: #4da6ff; text-decoration: none;'>{link['title']}</a></p>"
-                        streaming_html += "</div>"
-                    
-                    card_html = f"""
-                    <div class="movie-card">
-                        <div class="movie-poster-container">
-                            <img src="{movie['poster_url']}" class="movie-poster" alt="{movie['title']}">
-                        </div>
-                        <div class="movie-details">
-                            <div class="movie-header">
-                                <h2>{movie['title']}</h2>
-                                <div class="movie-meta">
-                                    <span class="meta-badge">{movie['year']}</span>
-                                    <span>{movie['genre']}</span>
-                                    <span>{rating_stars}</span>
-                                </div>
-                            </div>
-                            
-                            <div class="netizen-box">
-                                <span class="netizen-label">Kata Netizen</span>
-                                <span class="netizen-text">{movie['kata_netizen']}</span>
-                            </div>
-                            
-                            <p style='color: #a3a3a3; font-size: 0.9rem; margin: 10px 0;'>{movie['overview'][:200]}...</p>
-                            
-                            <div class="action-row">
-                                <a href="https://www.imdb.com/find?q={movie['title'].replace(' ', '+')}" target="_blank" class="btn-details">
-                                    📖 Details
-                                </a>
-                            </div>
-                            {streaming_html}
-                        </div>
-                    </div>
-                    """
-                    st.markdown(card_html, unsafe_allow_html=True)
-            else:
-                st.info("❌ Tidak ada film yang cocok ditemukan. Coba deskripsi mood yang berbeda!")
-    
-    # 3. Save to history
-    st.session_state.messages.append({"role": "assistant", "content": response_payload})
+        # Render Kartu Native
+        if "movies" in message:
+            render_movie_grid(message["movies"])
 
-# Add a spacer at the bottom so the last card isn't hidden by the input box
-st.markdown("<div style='height: 100px;'></div>", unsafe_allow_html=True)
+# --- 9. INPUT AREA ---
+is_ready = st.session_state.get("is_ready", False)
+
+if not is_ready:
+    st.markdown("<div style='text-align: center; color: #666; margin-bottom: 20px;'>⚠️ Please configure API Keys in the sidebar to start.</div>", unsafe_allow_html=True)
+
+prompt = st.chat_input("How are you feeling today?")
+
+if prompt:
+    if not is_ready:
+        st.sidebar.error("Please enter API Key first.")
+    else:
+        # Simpan pesan user
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        
+        # Tampilkan sementara pesan user (native)
+        # st.chat_message("user").write(prompt) # Opsional, di desain referensi user chat tidak terlalu menonjol
+
+        try:
+            agent = st.session_state.agent
+            
+            # --- AGENT LOGIC ---
+            with st.status("🧠 Analyzing mood...", expanded=True) as status:
+                plan = agent.plan(prompt)
+                mood_info = plan["mood_analysis"]
+                status.update(label="Mood analyzed!", state="complete", expanded=False)
+            
+            with st.spinner("🔍 Curating movies..."):
+                movies = agent.execute(plan, limit_per_genre=3)
+            
+            # --- RESPONSE PREPARATION ---
+            if not movies:
+                response_html = "<p style='color:#aaa; text-align:center;'>I couldn't find a specific prescription for that. Could you elaborate?</p>"
+                st.markdown(response_html, unsafe_allow_html=True)
+                st.session_state.messages.append({"role": "assistant", "content": response_html})
+            else:
+                mood_title = mood_info.get('detected_moods', ['Unknown'])[0].title()
+                
+                # HTML HEADER untuk bagian resep
+                response_html = f"""
+                <div style="margin-top: 20px; margin-bottom: 10px; border-left: 3px solid #D32F2F; padding-left: 15px;">
+                    <h3 style="margin:0; color:#eee;">Prescription for: <span style="color:#D32F2F;">{mood_title}</span></h3>
+                    <p style="color:#888; font-size: 0.9rem; margin:0;">Based on your input: "<i>{prompt}</i>"</p>
+                </div>
+                """
+                st.markdown(response_html, unsafe_allow_html=True)
+
+                # --- ENRICH DATA ---
+                enriched_movies = []
+                my_bar = st.progress(0, text="Gathering details...")
+                
+                for idx, movie in enumerate(movies):
+                    if 'payload' in movie:
+                        snippet = agent.tools['review_summarizer'].summarize_from_payload(movie['payload'], max_sentences=3)
+                        movie['review_snippet'] = snippet
+                    
+                    movie['platform_name'] = "Not Checked"
+                    if Config.TMDB_ENABLED:
+                        s_data = agent.tools['streaming_finder'].find_streaming(movie.get('title', ''))
+                        platforms = s_data.get("available_on", [])
+                        if platforms:
+                            movie['platform_name'] = platforms[0].upper()
+                        elif s_data.get("rent"):
+                            movie['platform_name'] = "Rent/Buy"
+                        else:
+                            movie['platform_name'] = "Not Available"
+                    else:
+                            movie['platform_name'] = "Enable TMDB Key"
+                    
+                    enriched_movies.append(movie)
+                    my_bar.progress((idx + 1) / len(movies))
+                
+                my_bar.empty()
+
+                # --- RENDER NATIVE GRID ---
+                render_movie_grid(enriched_movies)
+
+                # Simpan state
+                st.session_state.messages.append({
+                    "role": "assistant", 
+                    "content": response_html,
+                    "movies": enriched_movies
+                })
+
+        except Exception as e:
+            st.error(f"System Error: {e}")

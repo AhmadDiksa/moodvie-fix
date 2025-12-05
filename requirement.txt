@@ -1,0 +1,7 @@
+streamlit
+google-generativeai
+qdrant-client
+langchain-google-genai
+langchain-qdrant
+requests
+python-dotenv

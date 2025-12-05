@@ -1,0 +1,26 @@
+[theme]
+# Warna Utama (Aksen Merah sesuai logo/tombol)
+primaryColor = "#FF4B4B"
+
+# Latar Belakang Utama (Dark Modern)
+backgroundColor = "#0E1117"
+
+# Latar Belakang Sidebar & Input Box
+secondaryBackgroundColor = "#262730"
+
+# Warna Teks Utama
+textColor = "#FAFAFA"
+
+# Font (Pilihan: "sans serif", "serif", "monospace")
+font = "sans serif"
+
+[server]
+# Pengaturan Server agar berjalan lancar di cloud (misal: Streamlit Share / HuggingFace)
+headless = true
+enableCORS = false
+enableXsrfProtection = false
+fileWatcherType = "none"
+
+[client]
+# Menghilangkan pesan error debug di UI user (opsional, untuk production)
+showErrorDetails = false

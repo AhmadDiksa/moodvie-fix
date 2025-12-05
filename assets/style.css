@@ -1,0 +1,111 @@
+/* IMPORT FONTS */
+@import url('https://fonts.googleapis.com/css2?family=Oswald:wght@500;700&family=Roboto:wght@300;400;500&display=swap');
+
+/* 1. GLOBAL RESET & BACKGROUND */
+.stApp {
+    background-color: #0F0F0F !important; /* Hitam pekat */
+    font-family: 'Roboto', sans-serif;
+}
+
+/* 2. CUSTOM HEADER (Top Bar) */
+.custom-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1.5rem 0;
+    border-bottom: 1px solid #222;
+    margin-bottom: 3rem;
+}
+
+.brand-logo {
+    font-family: 'Oswald', sans-serif;
+    font-size: 1.8rem;
+    color: #D32F2F; /* Merah Netflix/Cinematic */
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+}
+
+.powered-by {
+    font-family: 'Roboto', sans-serif;
+    font-size: 0.8rem;
+    color: #666;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+}
+
+/* 3. HERO SECTION (Tampilan Awal) */
+.hero-container {
+    text-align: center;
+    padding: 10vh 0;
+    animation: fadeIn 1.5s ease-in-out;
+}
+
+.hero-title {
+    font-family: 'Oswald', sans-serif;
+    font-size: 5rem; 
+    color: #D32F2F; 
+    text-transform: uppercase;
+    font-weight: 700;
+    margin-bottom: 15px;
+    letter-spacing: 2px;
+    text-shadow: 0px 0px 30px rgba(211, 47, 47, 0.2);
+}
+
+.hero-subtitle {
+    font-size: 1.3rem;
+    color: #888;
+    max-width: 700px;
+    margin: 0 auto 40px auto;
+    font-weight: 300;
+    line-height: 1.6;
+}
+
+/* 4. CHAT INPUT STYLING */
+/* Mengubah tampilan input Streamlit agar lebih clean */
+.stChatInputContainer {
+    padding-bottom: 40px !important;
+}
+
+.stChatInput textarea {
+    background-color: #181818 !important; /* Abu gelap */
+    color: #eee !important;
+    border: 1px solid #333 !important;
+    border-radius: 50px !important; /* Pill shape */
+    padding: 15px 25px !important;
+    font-size: 1rem;
+}
+
+.stChatInput textarea:focus {
+    border-color: #D32F2F !important;
+    box-shadow: 0 0 10px rgba(211, 47, 47, 0.3) !important;
+}
+
+/* 5. CARD CONTAINER FIX (Native Streamlit) */
+/* Memaksa container native terlihat rapi di dark mode */
+[data-testid="stVerticalBlockBorderWrapper"] {
+    background-color: #141414;
+    border: 1px solid #222 !important;
+    border-radius: 8px !important;
+    transition: transform 0.2s;
+    /* Tinggi fix diatur di app.py via st.markdown, tapi default style disini */
+}
+
+[data-testid="stVerticalBlockBorderWrapper"]:hover {
+    border-color: #444 !important;
+    transform: translateY(-5px);
+}
+
+/* ANIMATION */
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(20px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+/* HIDE DEFAULT STREAMLIT ELEMENTS */
+#MainMenu {visibility: hidden;}
+footer {visibility: hidden;}
+header {visibility: hidden;}
