@@ -1,5 +1,6 @@
 import streamlit as st
 import time
+import textwrap # Import library untuk merapikan string
 from core.backend import Config, MoodAnalyzerTool, QdrantSearcher, ReviewSummarizer, StreamingFinder, MovieRecommenderAgent
 
 # --- 1. KONFIGURASI HALAMAN ---
@@ -20,10 +21,10 @@ def load_css(file_name):
 
 load_css("assets/style.css")
 
-# --- INJECT CSS TAMBAHAN UNTUK CONSISTENCY KARTU NATIVE ---
+# --- INJECT CSS TAMBAHAN UNTUK CONSISTENCY KARTU NATIVE & DIALOG WIDTH ---
 st.markdown("""
 <style>
-    /* Paksa tinggi minimum kartu native agar sejajar */
+    /* 1. Paksa tinggi minimum kartu native agar sejajar */
     [data-testid="stVerticalBlockBorderWrapper"] {
         height: 520px; /* Tinggi FIXED */
         display: flex;
@@ -75,12 +76,18 @@ st.markdown("""
         color: #D32F2F;
         background-color: #1a1a1a;
     }
+
+    /* 2. CUSTOM WIDTH UNTUK DIALOG (1080px) */
+    div[data-testid="stDialog"] div[role="dialog"] {
+        width: 1080px !important;
+        max-width: 95vw !important; /* Agar aman di layar mobile */
+    }
 </style>
 """, unsafe_allow_html=True)
 
 
 # --- 2. FUNGSI POP-UP DETAIL (st.dialog) ---
-@st.dialog("🎬 Detail Film & Analisis")
+@st.dialog("🎬 Detail Film & Analisis", width="large")
 def show_movie_details(movie):
     st.header(movie.get('title', 'Unknown'))
     
@@ -165,11 +172,68 @@ def render_movie_grid(movies):
                     show_movie_details(movie)
 
 
-# --- 4. SESSION STATE ---
+# --- 4. SESSION STATE & INIT CHECK ---
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# --- 5. CUSTOM HEADER (HTML) ---
+# Check readiness flag
+if "is_ready" not in st.session_state:
+    st.session_state.is_ready = False
+
+# --- 5. MODAL INPUT API KEY (FORCE POP-UP) ---
+@st.dialog("🔐 Konfigurasi Wajib", width="small")
+def setup_api_keys():
+    st.write("Aplikasi ini membutuhkan API Key untuk dapat bekerja.")
+    st.warning("Pop-up ini akan terus muncul sampai Anda memasukkan kunci yang valid.")
+    
+    # Input field di dalam dialog
+    gemini_key = st.text_input("Gemini API Key (Wajib)", type="password")
+    
+    default_tmdb = st.secrets.get("TMDB_API_KEY", "")
+    tmdb_key = st.text_input("TMDB API Key (Opsional)", value=default_tmdb, type="password")
+    
+    if st.button("🚀 Hubungkan & Mulai", use_container_width=True):
+        if not gemini_key:
+            st.error("Mohon isi Gemini API Key.")
+        else:
+            with st.spinner("Memverifikasi koneksi..."):
+                try:
+                    # Cek Secrets Qdrant
+                    if "QDRANT_URL" not in st.secrets or "QDRANT_API_KEY" not in st.secrets:
+                        st.error("Secrets Qdrant tidak ditemukan di .streamlit/secrets.toml")
+                        st.stop()
+
+                    # Inisialisasi Config
+                    Config.initialize(
+                        gemini_key=gemini_key,
+                        qdrant_url=st.secrets["QDRANT_URL"],
+                        qdrant_key=st.secrets["QDRANT_API_KEY"],
+                        tmdb_key=tmdb_key if tmdb_key else None
+                    )
+                    
+                    # Inisialisasi Agent
+                    st.session_state.agent = MovieRecommenderAgent(
+                        mood_tool=MoodAnalyzerTool(),
+                        qdrant_searcher=QdrantSearcher(),
+                        review_summarizer=ReviewSummarizer(),
+                        streaming_finder=StreamingFinder
+                    )
+                    
+                    # Set status Ready & Rerun
+                    st.session_state.is_ready = True
+                    st.success("Terhubung!")
+                    time.sleep(1)
+                    st.rerun()
+                    
+                except Exception as e:
+                    st.error(f"Gagal menghubungkan: {e}")
+
+# TRIGGER POP-UP JIKA BELUM READY
+if not st.session_state.is_ready:
+    setup_api_keys()
+
+
+# --- 6. CUSTOM HEADER (HTML) ---
 # Header menggunakan HTML agar persis desain
 st.markdown("""
     <div class="custom-header">
@@ -183,7 +247,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-# --- 6. HERO SECTION VS CHAT MODE ---
+# --- 7. HERO SECTION VS CHAT MODE ---
 if not st.session_state.messages:
     # Tampilan Awal: Judul Besar di Tengah (HTML)
     st.markdown("""
@@ -200,138 +264,145 @@ else:
     st.write("")
 
 
-# --- 7. SIDEBAR CONFIG ---
-with st.sidebar:
-    st.header("⚙️ Configuration")
-    if "QDRANT_URL" not in st.secrets or "QDRANT_API_KEY" not in st.secrets:
-        st.error("Missing Qdrant Secrets")
-        st.stop()
-    
-    with st.expander("🔐 API Keys Settings", expanded=True):
-        gemini_key = st.text_input("Gemini API Key", type="password")
-        default_tmdb = st.secrets.get("TMDB_API_KEY", "")
-        tmdb_key = st.text_input("TMDB API Key", value=default_tmdb, type="password")
+# --- 8. SIDEBAR CONFIG (FALLBACK/EDIT) ---
+# Sidebar tetap ada untuk mengganti key jika sudah login
+if st.session_state.is_ready:
+    with st.sidebar:
+        st.header("⚙️ Configuration")
+        if "QDRANT_URL" not in st.secrets or "QDRANT_API_KEY" not in st.secrets:
+            st.error("Missing Qdrant Secrets")
+        
+        with st.expander("🔐 Update API Keys", expanded=False):
+            st.info("Sistem sudah terhubung. Gunakan ini jika ingin mengganti Key.")
+            new_gemini_key = st.text_input("New Gemini API Key", type="password")
+            if st.button("Update Key"):
+                if new_gemini_key:
+                    # Re-init logic sederhana
+                    try:
+                        Config.initialize(
+                            gemini_key=new_gemini_key,
+                            qdrant_url=st.secrets["QDRANT_URL"],
+                            qdrant_key=st.secrets["QDRANT_API_KEY"]
+                        )
+                        # Re-create agent
+                        st.session_state.agent = MovieRecommenderAgent(
+                            mood_tool=MoodAnalyzerTool(),
+                            qdrant_searcher=QdrantSearcher(),
+                            review_summarizer=ReviewSummarizer(),
+                            streaming_finder=StreamingFinder
+                        )
+                        st.success("Key Updated!")
+                    except Exception as e:
+                        st.error(f"Error: {e}")
 
-    if st.button("Reconnect System", use_container_width=True):
-        if gemini_key:
-            try:
-                Config.initialize(
-                    gemini_key=gemini_key,
-                    qdrant_url=st.secrets["QDRANT_URL"],
-                    qdrant_key=st.secrets["QDRANT_API_KEY"],
-                    tmdb_key=tmdb_key if tmdb_key else None
-                )
-                st.session_state.agent = MovieRecommenderAgent(
-                    mood_tool=MoodAnalyzerTool(),
-                    qdrant_searcher=QdrantSearcher(),
-                    review_summarizer=ReviewSummarizer(),
-                    streaming_finder=StreamingFinder
-                )
-                st.session_state.is_ready = True
-                st.success("Connected!")
-                time.sleep(1)
-                st.rerun()
-            except Exception as e:
-                st.error(f"Error: {e}")
-
-# --- 8. CHAT HISTORY (RENDER NATIVE) ---
+# --- 9. CHAT HISTORY (RENDER NATIVE) ---
 for message in st.session_state.messages:
     if message["role"] == "user":
-        # Pesan user simpel
-        pass 
+        # Pesan User: Tampilkan bubble chat user (sebelumnya pass)
+        with st.chat_message("user"):
+            st.write(message["content"])
     else:
         # Pesan AI
-        if "content" in message:
-            # Render HTML text untuk judul "Prescription for..."
-            st.markdown(message["content"], unsafe_allow_html=True)
-        
-        # Render Kartu Native
-        if "movies" in message:
-            render_movie_grid(message["movies"])
+        with st.chat_message("assistant"):
+            if "content" in message:
+                # Render HTML/Markdown text (termasuk kata pembuka)
+                # PERBAIKAN: textwrap.dedent digunakan untuk menghapus spasi
+                st.markdown(textwrap.dedent(message["content"]), unsafe_allow_html=True)
+            
+            # Render Kartu Native
+            if "movies" in message:
+                render_movie_grid(message["movies"])
 
-# --- 9. INPUT AREA ---
-is_ready = st.session_state.get("is_ready", False)
-
-if not is_ready:
-    st.markdown("<div style='text-align: center; color: #666; margin-bottom: 20px;'>⚠️ Please configure API Keys in the sidebar to start.</div>", unsafe_allow_html=True)
-
-prompt = st.chat_input("How are you feeling today?")
+# --- 10. INPUT AREA ---
+# Kunci input jika belum ready (meskipun pop-up muncul, ini double safety)
+prompt = st.chat_input("How are you feeling today?", disabled=not st.session_state.is_ready)
 
 if prompt:
-    if not is_ready:
-        st.sidebar.error("Please enter API Key first.")
+    if not st.session_state.is_ready:
+        st.error("Please configure API Keys first.")
+        setup_api_keys() # Trigger pop-up lagi
     else:
         # Simpan pesan user
         st.session_state.messages.append({"role": "user", "content": prompt})
         
-        # Tampilkan sementara pesan user (native)
-        # st.chat_message("user").write(prompt) # Opsional, di desain referensi user chat tidak terlalu menonjol
+        # Tampilkan bubble chat user
+        with st.chat_message("user"):
+            st.write(prompt)
 
         try:
             agent = st.session_state.agent
             
             # --- AGENT LOGIC ---
-            with st.status("🧠 Analyzing mood...", expanded=True) as status:
-                plan = agent.plan(prompt)
-                mood_info = plan["mood_analysis"]
-                status.update(label="Mood analyzed!", state="complete", expanded=False)
-            
-            with st.spinner("🔍 Curating movies..."):
-                movies = agent.execute(plan, limit_per_genre=3)
-            
-            # --- RESPONSE PREPARATION ---
-            if not movies:
-                response_html = "<p style='color:#aaa; text-align:center;'>I couldn't find a specific prescription for that. Could you elaborate?</p>"
-                st.markdown(response_html, unsafe_allow_html=True)
-                st.session_state.messages.append({"role": "assistant", "content": response_html})
-            else:
-                mood_title = mood_info.get('detected_moods', ['Unknown'])[0].title()
+            with st.chat_message("assistant"):
+                with st.status("🧠 Analyzing mood...", expanded=True) as status:
+                    plan = agent.plan(prompt)
+                    mood_info = plan["mood_analysis"]
+                    status.update(label="Mood analyzed!", state="complete", expanded=False)
                 
-                # HTML HEADER untuk bagian resep
-                response_html = f"""
-                <div style="margin-top: 20px; margin-bottom: 10px; border-left: 3px solid #D32F2F; padding-left: 15px;">
-                    <h3 style="margin:0; color:#eee;">Prescription for: <span style="color:#D32F2F;">{mood_title}</span></h3>
-                    <p style="color:#888; font-size: 0.9rem; margin:0;">Based on your input: "<i>{prompt}</i>"</p>
-                </div>
-                """
-                st.markdown(response_html, unsafe_allow_html=True)
-
-                # --- ENRICH DATA ---
-                enriched_movies = []
-                my_bar = st.progress(0, text="Gathering details...")
+                with st.spinner("🔍 Curating movies..."):
+                    movies = agent.execute(plan, limit_per_genre=3)
                 
-                for idx, movie in enumerate(movies):
-                    if 'payload' in movie:
-                        snippet = agent.tools['review_summarizer'].summarize_from_payload(movie['payload'], max_sentences=3)
-                        movie['review_snippet'] = snippet
+                # --- RESPONSE PREPARATION ---
+                if not movies:
+                    response_html = "<p style='color:#aaa; text-align:center;'>I couldn't find a specific prescription for that. Could you elaborate?</p>"
+                    st.markdown(response_html, unsafe_allow_html=True)
+                    st.session_state.messages.append({"role": "assistant", "content": response_html})
+                else:
+                    # Ambil data mood
+                    mood_title = mood_info.get('detected_moods', ['Unknown'])[0].title()
+                    mood_summary = mood_info.get('summary', 'Here is a list of movies tailored to your current mood.')
                     
-                    movie['platform_name'] = "Not Checked"
-                    if Config.TMDB_ENABLED:
-                        s_data = agent.tools['streaming_finder'].find_streaming(movie.get('title', ''))
-                        platforms = s_data.get("available_on", [])
-                        if platforms:
-                            movie['platform_name'] = platforms[0].upper()
-                        elif s_data.get("rent"):
-                            movie['platform_name'] = "Rent/Buy"
+                    # 1. Kata Pembuka (Conversational)
+                    opening_text = f"_{mood_summary}_"
+                    
+                    # 2. Header Resep (HTML)
+                    # PERBAIKAN: Menggunakan textwrap.dedent di sini juga
+                    header_html = textwrap.dedent(f"""
+                    <div style="margin-top: 15px; margin-bottom: 20px; border-left: 3px solid #D32F2F; padding-left: 15px;">
+                        <h3 style="margin:0; color:#eee;">Prescription for: <span style="color:#D32F2F;">{mood_title}</span></h3>
+                    </div>
+                    """)
+                    
+                    # Gabungkan Konten Teks
+                    full_content = f"{opening_text}\n\n{header_html}"
+                    st.markdown(full_content, unsafe_allow_html=True)
+
+                    # --- ENRICH DATA ---
+                    enriched_movies = []
+                    my_bar = st.progress(0, text="Gathering details...")
+                    
+                    for idx, movie in enumerate(movies):
+                        if 'payload' in movie:
+                            snippet = agent.tools['review_summarizer'].summarize_from_payload(movie['payload'], max_sentences=3)
+                            movie['review_snippet'] = snippet
+                        
+                        movie['platform_name'] = "Not Checked"
+                        if Config.TMDB_ENABLED:
+                            s_data = agent.tools['streaming_finder'].find_streaming(movie.get('title', ''))
+                            platforms = s_data.get("available_on", [])
+                            if platforms:
+                                movie['platform_name'] = platforms[0].upper()
+                            elif s_data.get("rent"):
+                                movie['platform_name'] = "Rent/Buy"
+                            else:
+                                movie['platform_name'] = "Not Available"
                         else:
-                            movie['platform_name'] = "Not Available"
-                    else:
-                            movie['platform_name'] = "Enable TMDB Key"
+                                movie['platform_name'] = "Enable TMDB Key"
+                        
+                        enriched_movies.append(movie)
+                        my_bar.progress((idx + 1) / len(movies))
                     
-                    enriched_movies.append(movie)
-                    my_bar.progress((idx + 1) / len(movies))
-                
-                my_bar.empty()
+                    my_bar.empty()
 
-                # --- RENDER NATIVE GRID ---
-                render_movie_grid(enriched_movies)
+                    # --- RENDER NATIVE GRID ---
+                    render_movie_grid(enriched_movies)
 
-                # Simpan state
-                st.session_state.messages.append({
-                    "role": "assistant", 
-                    "content": response_html,
-                    "movies": enriched_movies
-                })
+                    # Simpan state (Gabungan teks pembuka + header)
+                    st.session_state.messages.append({
+                        "role": "assistant", 
+                        "content": full_content,
+                        "movies": enriched_movies
+                    })
 
         except Exception as e:
             st.error(f"System Error: {e}")
